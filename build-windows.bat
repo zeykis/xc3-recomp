@@ -55,9 +55,8 @@ set "HT_SHA=36e9a221c8a7949c86ada9388eb703c90663aedfe9f65b6032429614c5e1abe8"
 if exist tools\hactool.exe goto :ht_ready
 echo   downloading hactool 1.4.0 (once)
 curl -sSL -o tools\hactool.zip "%HT_URL%" || (echo   hactool download failed. & exit /b 1)
-set "HT_GOT="
-for /f "skip=1 delims=" %%h in ('certutil -hashfile tools\hactool.zip SHA256 ^| findstr /v ":"') do if not defined HT_GOT set "HT_GOT=%%h"
-set "HT_GOT=!HT_GOT: =!"
+set "HT_GOT=none"
+for /f "delims=" %%h in ('python -c "import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" tools\hactool.zip') do set "HT_GOT=%%h"
 if /i not "!HT_GOT!"=="%HT_SHA%" (echo   hactool download has the wrong checksum: !HT_GOT! & exit /b 1)
 tar -xf tools\hactool.zip -C tools hactool.exe || exit /b 1
 del tools\hactool.zip
@@ -76,9 +75,8 @@ if exist third_party\ffmpeg\lib\avcodec.lib goto :ff_ready
 echo   downloading FFmpeg 8.1 (80 MB, once)
 if not exist third_party\ffmpeg mkdir third_party\ffmpeg
 curl -sSL -o third_party\ffmpeg\ffmpeg.zip "%FF_URL%" || (echo   FFmpeg download failed. & exit /b 1)
-set "FF_GOT="
-for /f "skip=1 delims=" %%h in ('certutil -hashfile third_party\ffmpeg\ffmpeg.zip SHA256 ^| findstr /v ":"') do if not defined FF_GOT set "FF_GOT=%%h"
-set "FF_GOT=!FF_GOT: =!"
+set "FF_GOT=none"
+for /f "delims=" %%h in ('python -c "import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" third_party\ffmpeg\ffmpeg.zip') do set "FF_GOT=%%h"
 if /i not "!FF_GOT!"=="%FF_SHA%" (echo   FFmpeg download has the wrong checksum: !FF_GOT! & exit /b 1)
 tar -xf third_party\ffmpeg\ffmpeg.zip -C third_party\ffmpeg --strip-components=1 || exit /b 1
 del third_party\ffmpeg\ffmpeg.zip
