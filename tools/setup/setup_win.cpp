@@ -28,7 +28,7 @@
 #if __has_include("build_info.h")
 #include "build_info.h"
 #endif
-#ifndef XC3_MAIN_BUILD_ID   // (built before the game code was generated: the version the patches and hooks are for, 2.2.0)
+#ifndef XC3_MAIN_BUILD_ID   // (built before the game code was generated: the version the patches and hooks are for, 2.2.1)
 #define XC3_MAIN_BUILD_ID "82D187FE9EF9BE921B8E1B1CDDF7BD287CDB22C1"
 #endif
 #pragma comment(linker, "/manifestdependency:\"type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
@@ -400,14 +400,14 @@ static bool install(std::string &err) {
             if (!nx::nso_build_id(u8((ex / L"main").wstring()), id)) { err = "Could not decrypt the update (see _setup_tmp\\hactool_exefs_u.txt): check prod.keys / title keys."; return false; }
             log("Update code build id: " + id.substr(0, 16));
             if (want.empty() || id == want) exefs_dir = ex;
-            else log("  this build of xc3.exe needs build id " + want.substr(0, 16) + " (game version 2.2.0)");
+            else log("  this build of xc3.exe needs build id " + want.substr(0, 16) + " (game version 2.2.1)");
         }
         if (exefs_dir.empty()) {
             fs::path ex = tmp / L"exefs_base"; fs::remove_all(ex, ec);
             hactool(tk_arg(K, F.base) + " --exefsdir=" + quote(u8(ex.wstring())) + " " + quote(base_nca), tmp / L"hactool_exefs_b.txt", "Reading the base game's code", 0, dest);
             std::string id;
             if (!nx::nso_build_id(u8((ex / L"main").wstring()), id)) { err = "Could not decrypt the base game (see _setup_tmp\\hactool_exefs_b.txt): check prod.keys."; return false; }
-            if (!want.empty() && id != want) { err = "Your game files are not the version this build was made for (it needs update 2.2.0, build id " + want.substr(0, 16) + "). Add the 2.2.0 update."; return false; }
+            if (!want.empty() && id != want) { err = "Your game files are not the version this build was made for (it needs update 2.2.1, build id " + want.substr(0, 16) + "). Add the 2.2.1 update."; return false; }
             exefs_dir = ex; upd_nca.clear();
         }
         fs::remove_all(game / L"exefs", ec);
@@ -576,10 +576,10 @@ static void layout_controls() {
     mk(L"BUTTON", L"Browse...", BS_PUSHBUTTON, x + W - bw, y - S(2), bw, bh, ID_BASEB); y += S(26);
     g_base_st = mk(L"STATIC", L".xci or .nsp (or an installed .nca)", SS_LEFT, x + lw, y, ew, S(18), -1); y += S(24);
     // update
-    mk(L"STATIC", L"Update (2.2.0):", SS_LEFT, x, y + S(4), lw, S(20), -1);
+    mk(L"STATIC", L"Update (2.2.1):", SS_LEFT, x, y + S(4), lw, S(20), -1);
     g_upd = mk(L"EDIT", L"", ES_AUTOHSCROLL | WS_BORDER, x + lw, y, ew, S(24), ID_UPD, WS_EX_CLIENTEDGE);
     mk(L"BUTTON", L"Browse...", BS_PUSHBUTTON, x + W - bw, y - S(2), bw, bh, ID_UPDB); y += S(26);
-    g_upd_st = mk(L"STATIC", L".nsp or .nca - needed: the PC version is made from 2.2.0", SS_LEFT, x + lw, y, ew, S(18), -1); y += S(24);
+    g_upd_st = mk(L"STATIC", L".nsp or .nca - needed: the PC version is made from 2.2.1", SS_LEFT, x + lw, y, ew, S(18), -1); y += S(24);
     // DLC
     mk(L"STATIC", L"DLC:", SS_LEFT, x, y + S(4), lw, S(20), -1);
     g_list = mk(L"LISTBOX", L"", WS_BORDER | WS_VSCROLL | WS_HSCROLL | LBS_NOINTEGRALHEIGHT, x + lw, y, ew, S(92), ID_LIST, WS_EX_CLIENTEDGE);
@@ -616,7 +616,7 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l) {
         case ID_BASEB: case ID_UPDB: {
             bool base = LOWORD(w) == ID_BASEB;
             COMDLG_FILTERSPEC f[] = {{L"Switch game files", base ? L"*.xci;*.nsp;*.nca" : L"*.nsp;*.nca"}, {L"All files", L"*.*"}};
-            auto r = pick(false, false, base ? L"Base game (.xci / .nsp)" : L"Update 2.2.0 (.nsp / .nca)", f, 2);
+            auto r = pick(false, false, base ? L"Base game (.xci / .nsp)" : L"Update 2.2.1 (.nsp / .nca)", f, 2);
             if (r.empty()) return 0;
             nx::Keys K;
             if (!load_keys_quiet(K)) { set_slot(base ? g_base : g_upd, base ? g_base_st : g_upd_st, r[0], L"(not checked: select prod.keys)"); return 0; }

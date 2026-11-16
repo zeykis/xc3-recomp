@@ -1,6 +1,6 @@
 # Runtime hooks: <main build id prefix> <function address> # purpose
 # The listed functions call xrt_hook(c, address) on entry (runtime/src/loader.c dispatches to registered handlers).
-# 2.2.0: scene render target setup (renderer, sizes from its settings struct) - XRT_RES_SCALE
+# 2.2.1: scene render target setup (renderer, sizes from its settings struct) - XRT_RES_SCALE
 82D187FE9EF9BE92 f5905c   # render targets (re)created: scale the scene size
 82D187FE9EF9BE92 1257798   # ml::DevFileArchiver::getFileInfo: a file a mod replaces is hidden from the archive (loaded loose, as xc3-file-loader does)
 82D187FE9EF9BE92 e6b3e0   # pad hold timers (menu cursor repeat), stepped by a fixed 1/30 s a frame: the real frame time instead

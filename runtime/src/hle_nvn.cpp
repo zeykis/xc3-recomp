@@ -149,7 +149,7 @@ HLE(tb_storage_align) { RET(0x10000); }
 
 // initialize from builder
 static uint64_t pool_ptr(uint64_t pool) { auto it = g_pools.find(pool); return it == g_pools.end() ? 0 : it->second.storage; }
-// Internal render resolution (M5). XC3 2.2.0 renders its 3D scene at 960x544 and reconstructs it (temporal upscale)
+// Internal render resolution (M5). XC3 2.2.1 renders its 3D scene at 960x544 and reconstructs it (temporal upscale)
 // into 1920x1088; the image it presents stays 1920x1080. The renderer creates its targets from a settings struct
 // (main+0xf5905c: output size at +0x18, scene size at +0x34) and a few other targets from read-only constants
 // (main+0x14e602c: the same two sizes). XRT_RES_SCALE=s multiplies the scene size (default 1; 2 = 1920x1088, 2.66 ~

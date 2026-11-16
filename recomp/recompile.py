@@ -64,7 +64,7 @@ for i in range(relasz // 24):
         code_ptrs.add(r_add)
 
 # ---------------------------------------------------------------- code patches (.pchtxt, e.g. 60 fps mods)
-# Addresses in these files are offsets in main's memory image (verified on the XC3 2.2.0 60 fps patch: the old
+# Addresses in these files are offsets in main's memory image (verified on the XC3 2.2.1 60 fps patch: the old
 # instruction at each address is the one the patch replaces). Patched bytes go into IMG before disassembly. A patch
 # that redirects code with `b CAVE`, where the cave ends with `b SITE+4`, is inlined at the site (DETOURS below):
 # the generated function runs the cave's instructions in place, so no new entry points split existing functions.

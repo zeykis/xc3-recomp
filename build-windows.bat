@@ -68,10 +68,10 @@ if "%MODE%"=="tools" goto :tools_build
 echo [4/5] generated code
 if exist game\main.elf goto :have_game
 REM First run: no game files yet. Build the setup and open it (its install folder is this folder): the player adds
-REM their own base game / update 2.2.0 / DLC (or it finds an emulator's) and prod.keys, it installs them into game\.
+REM their own base game / update 2.2.1 / DLC (or it finds an emulator's) and prod.keys, it installs them into game\.
 echo   No game files yet: building XC3 Setup and opening it...
 call :tools_cmake || exit /b 1
-echo   In XC3 Setup: add your base game, update 2.2.0 and DLC (or let it find your emulator's), pick prod.keys,
+echo   In XC3 Setup: add your base game, update 2.2.1 and DLC (or let it find your emulator's), pick prod.keys,
 echo   keep this folder as the install folder, then Install. The build continues when you close Setup.
 start "" /wait build-cmake\xc3-setup.exe
 if not exist game\main.elf (echo   The game files are not installed ^(game\main.elf missing^): run build-windows.bat again to reopen Setup. & exit /b 1)

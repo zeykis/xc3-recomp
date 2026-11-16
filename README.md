@@ -38,7 +38,7 @@ terminal after installing anything, so the PATH is updated.
 build-windows.bat
 ```
 
-You need your own copy of the game: the base game (`.xci` / `.nsp`), **update 2.2.0** (`.nsp` / `.nca`; the code is
+You need your own copy of the game: the base game (`.xci` / `.nsp`), **update 2.2.1** (`.nsp` / `.nca`; the code is
 recompiled for that exact version) and, if you have them, the DLC, or simply a copy installed in Eden / a
 yuzu-based emulator (found automatically, with its saves), plus `prod.keys` dumped from your own console.
 
@@ -120,7 +120,7 @@ of the permanent patches (`patches\*.pchtxt`: 60 fps, high frame rate, resolutio
 
 **Installer:** `make_installer.bat [nobuild] [zip]` packages `dist\XC3-Recomp-Setup\` (`XC3 Setup.exe` + `files\`: xc3.exe,
 DLLs, hactool, patches and mods, shader cache). The setup takes the player's own files - base game `.xci`/`.nsp`,
-update 2.2.0 and DLC `.nsp`/`.nca`, or what Eden / yuzu-based emulators have installed (found automatically, with
+update 2.2.1 and DLC `.nsp`/`.nca`, or what Eden / yuzu-based emulators have installed (found automatically, with
 their saves) - and `prod.keys` (title keys come from the `.nsp` tickets or `title.keys`). It identifies each file by
 its NCA header, checks that the update's code is the version the exe was recompiled for (`gen/build_info.h`),
 extracts the ExeFS / RomFS (update applied) and DLC with hactool, converts the executables to ELF, copies the program
@@ -283,5 +283,5 @@ None of this includes anything from the game: `game/` (your dump) and `gen/` (co
 are never committed.
 
 The code patches in `patches/` that don't say "xc3-recomp" in their header (60 fps, and the graphics mods in
-`patches/mods/`) are community emulator mods for XC3 2.2.0, kept as their authors published them; credit to their
+`patches/mods/`) are community emulator mods for this executable (their headers say v2.2.0; their @nsobid is the 2.2.1 executable's), kept as their authors published them; credit to their
 authors. hactool (ISC), FFmpeg and Xenoblade-Series-Randomizer are downloaded from their own releases, not included.

@@ -531,7 +531,7 @@ static void mods_init() {
 }
 // The game reads almost everything from its archive (bf3.arh / bf3.ard); it looks for loose RomFS files (DLC packs
 // first, then the base game) only for files the archive doesn't list. A file a mod has is hidden from the archive
-// lookup (ml::DevFileArchiver::getFileInfo, main+0x1257798 in 2.2.0: the address xc3-file-loader by roccodev hooks),
+// lookup (ml::DevFileArchiver::getFileInfo, main+0x1257798 in 2.2.1: the address xc3-file-loader by roccodev hooks),
 // so the game opens it loose - from the mod (resolve_path).
 static std::atomic<uint64_t> g_mod_hidden{0};
 static int archive_lookup_hook(Ctx *c) {   // (this, media, const char *name, FileInfoResult &)
@@ -731,7 +731,7 @@ HLE(fs_MountAddOnContent) {   // (name, int index, void* cache, size_t)
     if (!fs::is_directory(d)) { LOG(1, "[aoc] mount %s: DLC %d not installed", S(0), (int)c->x[1]); RET(0x7d402); return; }   // fs: target not found
     g_mounts[S(0)] = d; LOG(1, "[aoc] mount %s: -> %s", S(0), d.c_str()); OK();
 }
-HLE(oe_display_version) { std::memset(P(0), 0, 16); std::strcpy((char *)P(0), "2.2.0"); }   // DisplayVersion: char[16]
+HLE(oe_display_version) { std::memset(P(0), 0, 16); std::strcpy((char *)P(0), "2.2.1"); }   // DisplayVersion: char[16]
 HLE(fs_save_size_max) { *(int64_t *)P(0) = 0x40000000; *(int64_t *)P(1) = 0x40000000; OK(); }
 HLE(oe_pseudo_device_id) { std::memset(P(0), 0x5a, 16); }
 

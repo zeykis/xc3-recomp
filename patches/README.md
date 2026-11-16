@@ -1,6 +1,6 @@
-# Code patches (XC3 2.2.0)
+# Code patches (XC3 2.2.1)
 
-IPSwitch `.pchtxt` patches for the game's executable, version 2.2.0 (`@nsobid-82D187FE…`). `recomp/recompile.py`
+IPSwitch `.pchtxt` patches for the game's executable, version 2.2.1 (`@nsobid-82D187FE…`). `recomp/recompile.py`
 applies them before translating the code (a game folder's own `game/patches/` replaces this folder when it exists).
 
 | File | What | From |

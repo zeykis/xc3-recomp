@@ -1,7 +1,7 @@
 @echo off
 rem Packages the installer: dist\XC3-Recomp-Setup\ with "XC3 Setup.exe" and files\ (xc3.exe + DLLs, hactool.exe,
 rem the patches and graphics mods, the shader cache). Give that folder (or the .zip, with "zip") to the player:
-rem the setup asks for THEIR game files (base game .xci/.nsp, update 2.2.0 and DLC .nsp/.nca, or an emulator's
+rem the setup asks for THEIR game files (base game .xci/.nsp, update 2.2.1 and DLC .nsp/.nca, or an emulator's
 rem installs) and their console keys, and installs everything. No game data is in the package, but xc3.exe is
 rem made from the game's code: only share it with people who own the game.
 rem
@@ -34,7 +34,7 @@ if exist game\pipeline_cache.bin copy /y game\pipeline_cache.bin "%OUT%\files\" 
   echo Xenoblade Chronicles 3 - recompiled PC version
   echo.
   echo 1. Run "XC3 Setup.exe".
-  echo 2. Put your files in their boxes: base game ^(.xci / .nsp^), update 2.2.0 ^(.nsp / .nca^), DLC ^(.nsp / .nca,
+  echo 2. Put your files in their boxes: base game ^(.xci / .nsp^), update 2.2.1 ^(.nsp / .nca^), DLC ^(.nsp / .nca,
   echo    any number^). You can also drop files or a folder on the window: they are sorted by what they contain.
   echo    To add DLC later: run Setup again on the same folder, tick "Keep the installed base game + update",
   echo    add the DLC and Install.
