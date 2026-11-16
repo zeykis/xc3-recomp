@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -13,6 +14,7 @@ namespace nx {
 struct Keys {
     std::map<std::string, std::string> named;          // prod.keys: name -> hex
     std::map<std::string, std::string> titlekeys;      // rights id (32 hex, upper) -> encrypted title key (32 hex)
+    std::set<std::string> personalized;                // rights ids whose only ticket is personalized (console-bound)
     bool load_prod(const std::string &path);           // false: missing / no header_key
     int load_titlekeys(const std::string &path);       // "rights_id = key" lines; returns how many were read
     bool header_key(uint8_t out[32]) const;
@@ -38,7 +40,7 @@ struct NcaInfo {
 bool nca_identify(const Keys &k, const Blob &b, NcaInfo &out);   // false: not an NCA / no key
 
 // ticket (.tik): rights id + common title key; false for personalized tickets (console-bound)
-bool parse_ticket(const std::vector<uint8_t> &t, std::string &rights_id, std::string &key);
+bool parse_ticket(const std::vector<uint8_t> &t, std::string &rights_id, std::string &key, bool *personalized = nullptr);
 
 // NSO (exefs/main etc.) -> the ELF wrapper the runtime loads (same layout as REA triage.py nso_to_elf)
 bool nso_build_id(const std::string &nso_path, std::string &hex64);

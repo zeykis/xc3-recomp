@@ -172,7 +172,11 @@ static void scan_file(nx::Keys &K, Found &F, const fs::path &p, int &n_files) {
             if (e.name.size() > 4 && e.name.substr(e.name.size() - 4) == ".tik" && e.size < 0x1000) {
                 std::vector<uint8_t> t((size_t)e.size); nx::Blob tb{ps, e.off, e.size};
                 std::string rid, key;
-                if (tb.read(0, t.data(), t.size()) && nx::parse_ticket(t, rid, key)) K.titlekeys[rid] = key;
+                bool pers = false;
+                if (tb.read(0, t.data(), t.size())) {
+                    if (nx::parse_ticket(t, rid, key, &pers)) K.titlekeys[rid] = key;
+                    else if (pers) K.personalized.insert(rid);
+                }
             }
         for (auto &e : es)
             if (e.name.size() > 4 && e.name.substr(e.name.size() - 4) == ".nca") {
@@ -330,6 +334,19 @@ static std::string tk_arg(const nx::Keys &K, const nx::NcaInfo &n) {
     auto it = K.titlekeys.find(n.rights_id);
     return it == K.titlekeys.end() ? "" : " --titlekey=" + it->second;
 }
+// an NCA that needs a title key Setup doesn't have: why, and what to do
+static std::string missing_titlekey(const nx::Keys &K, const nx::NcaInfo &n, const char *what) {
+    if (n.rights_id.empty() || K.titlekeys.count(n.rights_id)) return "";
+    std::string e = std::string("The ") + what + "'s title key is missing (rights id " + n.rights_id + "). ";
+    if (K.personalized.count(n.rights_id))
+        e += "Its .nsp has a personalized ticket (dumped with console-specific data), which only your console can decrypt. "
+             "Dump it again with nxdumptool with \"remove console specific data\" on, or install it in Eden first "
+             "(Setup then reads Eden's title.keys).";
+    else
+        e += "The .nsp has no ticket for it and title.keys (next to prod.keys) doesn't list it: dump it with its ticket, "
+             "or install it in Eden first (Setup then reads Eden's title.keys).";
+    return e;
+}
 static uint64_t dir_files(const fs::path &p) {
     uint64_t n = 0; std::error_code ec;
     for (auto it = fs::recursive_directory_iterator(p, ec); it != fs::recursive_directory_iterator(); it.increment(ec)) { if (ec) break; if (it->is_regular_file(ec)) n++; }
@@ -395,6 +412,7 @@ static bool install(std::string &err) {
         if (F.has_update) {
             if (!materialize(F.update, tmp, "update_program.nca", upd_nca)) { err = "Can't read the update file."; return false; }
             fs::path ex = tmp / L"exefs_update"; fs::remove_all(ex, ec);
+            err = missing_titlekey(K, F.update, "update"); if (!err.empty()) return false;
             hactool(tk_arg(K, F.update) + " --exefsdir=" + quote(u8(ex.wstring())) + " " + quote(upd_nca), tmp / L"hactool_exefs_u.txt", "Reading the update's code", 0, dest);
             std::string id;
             if (!nx::nso_build_id(u8((ex / L"main").wstring()), id)) { err = "Could not decrypt the update (see _setup_tmp\\hactool_exefs_u.txt): check prod.keys / title keys."; return false; }

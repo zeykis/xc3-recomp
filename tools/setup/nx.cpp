@@ -231,7 +231,8 @@ bool nca_identify(const Keys &k, const Blob &b, NcaInfo &out) {
     return true;
 }
 
-bool parse_ticket(const std::vector<uint8_t> &t, std::string &rights_id, std::string &key) {
+bool parse_ticket(const std::vector<uint8_t> &t, std::string &rights_id, std::string &key, bool *personalized) {
+    if (personalized) *personalized = false;
     if (t.size() < 4) return false;
     uint32_t sig = rd32(t.data());
     size_t hdr;
@@ -242,9 +243,9 @@ bool parse_ticket(const std::vector<uint8_t> &t, std::string &rights_id, std::st
     default: return false;
     }
     if (t.size() < hdr + 0x170) return false;
-    if (t[hdr + 0x141] != 0) return false;   // personalized: needs the console's keys
-    key = hex(t.data() + hdr + 0x40, 16);
     rights_id = hex(t.data() + hdr + 0x160, 16);
+    if (t[hdr + 0x141] != 0) { if (personalized) *personalized = true; return false; }   // personalized: needs the console's keys
+    key = hex(t.data() + hdr + 0x40, 16);
     return true;
 }
 
