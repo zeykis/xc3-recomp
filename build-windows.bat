@@ -1,8 +1,9 @@
 @echo off
 REM Windows build for xc3-recomp. Run from anywhere:
-REM   build-windows.bat tools   the tools only (no game files needed): build-cmake\xc3-setup.exe installs the game
-REM                             files from your own dump into game\, build-cmake\xc3-launcher.exe
-REM   build-windows.bat         everything: recompiles game\main.elf into gen\ and builds build-cmake\xc3.exe
+REM   build-windows.bat         everything. The first time (no game\ yet) it builds and opens XC3 Setup, which installs
+REM                             your own base game / update / DLC into game\, then recompiles game\main.elf into gen\
+REM                             and builds build-cmake\xc3.exe
+REM   build-windows.bat tools   the tools only (no game files needed): xc3-setup.exe, xc3-launcher.exe
 REM Needs: Python 3, LLVM (clang), Visual Studio Build Tools (C++ workload = linker + Windows SDK), CMake.
 setlocal enabledelayedexpansion
 cd /d "%~dp0"
@@ -56,7 +57,7 @@ if exist tools\hactool.exe goto :ht_ready
 echo   downloading hactool 1.4.0 (once)
 curl -sSL -o tools\hactool.zip "%HT_URL%" || (echo   hactool download failed. & exit /b 1)
 set "HT_GOT=none"
-for /f "delims=" %%h in ('python -c "import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" tools\hactool.zip') do set "HT_GOT=%%h"
+for /f "delims=" %%h in ('python -c "import hashlib,sys,pathlib;print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())" tools\hactool.zip') do set "HT_GOT=%%h"
 if /i not "!HT_GOT!"=="%HT_SHA%" (echo   hactool download has the wrong checksum: !HT_GOT! & exit /b 1)
 tar -xf tools\hactool.zip -C tools hactool.exe || exit /b 1
 del tools\hactool.zip
@@ -65,7 +66,16 @@ del tools\hactool.zip
 if "%MODE%"=="tools" goto :tools_build
 
 echo [4/5] generated code
-if not exist game\main.elf (echo   game\main.elf missing - install the game files first: build-windows.bat tools, then build-cmake\xc3-setup.exe ^(install folder: this folder^). & exit /b 1)
+if exist game\main.elf goto :have_game
+REM First run: no game files yet. Build the setup and open it (its install folder is this folder): the player adds
+REM their own base game / update 2.2.0 / DLC (or it finds an emulator's) and prod.keys, it installs them into game\.
+echo   No game files yet: building XC3 Setup and opening it...
+call :tools_cmake || exit /b 1
+echo   In XC3 Setup: add your base game, update 2.2.0 and DLC (or let it find your emulator's), pick prod.keys,
+echo   keep this folder as the install folder, then Install. The build continues when you close Setup.
+start "" /wait build-cmake\xc3-setup.exe
+if not exist game\main.elf (echo   The game files are not installed ^(game\main.elf missing^): run build-windows.bat again to reopen Setup. & exit /b 1)
+:have_game
 python recomp\recompile.py || exit /b 1
 
 REM FFmpeg (cutscene video): a pinned LGPL shared build, downloaded once into third_party\ffmpeg (not committed)
@@ -76,7 +86,7 @@ echo   downloading FFmpeg 8.1 (80 MB, once)
 if not exist third_party\ffmpeg mkdir third_party\ffmpeg
 curl -sSL -o third_party\ffmpeg\ffmpeg.zip "%FF_URL%" || (echo   FFmpeg download failed. & exit /b 1)
 set "FF_GOT=none"
-for /f "delims=" %%h in ('python -c "import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" third_party\ffmpeg\ffmpeg.zip') do set "FF_GOT=%%h"
+for /f "delims=" %%h in ('python -c "import hashlib,sys,pathlib;print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())" third_party\ffmpeg\ffmpeg.zip') do set "FF_GOT=%%h"
 if /i not "!FF_GOT!"=="%FF_SHA%" (echo   FFmpeg download has the wrong checksum: !FF_GOT! & exit /b 1)
 tar -xf third_party\ffmpeg\ffmpeg.zip -C third_party\ffmpeg --strip-components=1 || exit /b 1
 del third_party\ffmpeg\ffmpeg.zip
@@ -96,11 +106,14 @@ exit /b 0
 :tools_build
 echo [4/5] (tools only: no generated code needed)
 echo [5/5] build xc3-setup + xc3-launcher
+call :tools_cmake || exit /b 1
+echo.
+echo Built build-cmake\xc3-setup.exe. (build-windows.bat without "tools" opens it by itself when game\ is empty.)
+endlocal
+exit /b 0
+
+:tools_cmake
 cmake -B build-cmake -G Ninja -DCMAKE_MAKE_PROGRAM="!NINJA!" -DCMAKE_C_COMPILER="!CLANG!" -DCMAKE_CXX_COMPILER="!CLANGXX!" -DCMAKE_BUILD_TYPE=RelWithDebInfo || exit /b 1
 cmake --build build-cmake --target xc3-setup xc3-launcher || exit /b 1
 copy /y tools\hactool.exe build-cmake\ > nul
-echo.
-echo Built build-cmake\xc3-setup.exe. Run it, give it your own game files and prod.keys, and choose THIS folder
-echo (%CD%) as the install folder: the game files go to game\. Then run build-windows.bat again.
-endlocal
 exit /b 0

@@ -32,39 +32,33 @@ publish them (they are in `.gitignore`).
 Ninja and the Python packages are installed automatically by the build script. Open a **new**
 terminal after installing anything, so the PATH is updated.
 
-### 2. Install your game files
-
-You need your own copy of the game: the base game (`.xci` / `.nsp`), **update 2.2.0** (`.nsp` / `.nca`; the code is
-recompiled for that exact version) and, if you have it, the DLC — or simply a copy installed in Eden / a yuzu-based
-emulator, which is found automatically (with its saves) — plus `prod.keys` dumped from your own console.
-
-```
-build-windows.bat tools
-build-cmake\xc3-setup.exe
-```
-
-The first command builds the setup and the launcher (no game files needed yet) and downloads
-[hactool](https://github.com/SciresM/hactool) (pinned release, checksum verified). In the setup, add your files, pick
-`prod.keys`, keep **this folder** as the install folder (it is filled in when the setup runs from `build-cmake\`) and
-press *Install*: the game files go to `game\` (about 20 GB; `main.elf`, `sdk.elf`, `romfs\`, `aoc\`).
-
-### 3. Build
+### 2. Build (installs your game files the first time)
 
 ```
 build-windows.bat
 ```
 
-It runs five steps and stops with the exact fix if something is missing:
+You need your own copy of the game: the base game (`.xci` / `.nsp`), **update 2.2.0** (`.nsp` / `.nca`; the code is
+recompiled for that exact version) and, if you have them, the DLC, or simply a copy installed in Eden / a
+yuzu-based emulator (found automatically, with its saves), plus `prod.keys` dumped from your own console.
+
+The first time, when `game\` is still empty, the script builds **XC3 Setup** and opens it: add your files (or drop
+them on the window), pick `prod.keys`, keep the install folder it fills in (this folder) and press *Install*. The game
+files go to `game\` (about 20 GB). Close Setup and the build continues on its own:
 
 1. **Python**: installs `capstone` (instruction decoder) and `ninja` (build tool) with pip.
 2. **clang**: finds LLVM, including `C:\Program Files\LLVM\bin` if it isn't on PATH.
-3. **Visual Studio**: loads the C++ build environment (linker + Windows SDK).
+3. **Visual Studio**: loads the C++ build environment (linker + Windows SDK); downloads
+   [hactool](https://github.com/SciresM/hactool) for Setup (pinned release, checksum verified).
 4. **Generated code**: runs `recomp\recompile.py`, which turns `game\main.elf` (with the patches in `patches\`) into
    ~430 MB of C in `gen\` (~1 min).
 5. **Build**: compiles everything into `build-cmake\xc3.exe` (FFmpeg for the cutscenes is downloaded once, pinned and
    checksum verified). The first build takes 10–30 min depending on your CPU; later builds only recompile what changed.
 
-### 4. Play
+To add DLC later or reinstall: run `build-cmake\xc3-setup.exe` again (tick *keep the installed game data*
+to only add DLC). `build-windows.bat tools` builds just Setup and the launcher.
+
+### 3. Play
 
 ```
 make_playable.bat
