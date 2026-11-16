@@ -1,0 +1,28 @@
+# Game-derived files: never commit (copyright)
+game/
+gen/
+gen_test/
+game100/
+game221/
+work221/
+reference/
+analysis/
+# build outputs and downloads
+build/
+build-*/
+dist/
+third_party/ffmpeg/
+tools/hactool.exe
+tools/hactool.zip
+*.o
+*.obj
+__pycache__/
+*.pyc
+# local runs / logs
+runner/
+runner.bat
+*.log
+build-log.txt
+run-log*.txt
+play-log.txt
+crash.dmp

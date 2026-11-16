@@ -1,0 +1,18 @@
+@nsobid-82D187FE9EF9BE921B8E1B1CDDF7BD287CDB22C1
+
+# Xenoblade Chronicles 3 v2.2.0 - high frame rate on top of 60fps_2.2.0.pchtxt (xc3-recomp, milestone M5)
+# The frame cap is then applied by the runtime (XRT_FPS_CAP, default 120; 0 = uncapped).
+
+@flag offset_shift 0x100
+
+@enabled
+// frame-time clamp: minimum 1/480 s instead of 1/120 (cave of the 60fps patch: fmov s2, #8.0)
+00ECD794 0210241E
+// maximum = the 60 fps frame time (ldr s2, [x19, #0x214]) instead of twice the minimum
+0000F408 621642BD
+// game speed factor kept at frame time x 30 (fmov s2, #3.75 = 30 / 8)
+0000F42C 02D0211E
+// the game's own frame limiter (busy-wait to 0.997 x 1/60 s): threshold 0
+0124FACC 16008052
+0124FAD0 1F2003D5
+@stop

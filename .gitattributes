@@ -1,0 +1,3 @@
+# Windows batch files need CRLF (cmd's labels / goto misbehave with LF)
+*.bat text eol=crlf
+*.pchtxt text

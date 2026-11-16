@@ -1,0 +1,7 @@
+# XC3 2.2.0 (main build id 82D187FE9EF9BE92...): entry points found at run time (indirect jumps into the middle of a
+# function, e.g. switch targets). One hex address per line, read by recompile.py for this build id only.
+9f93dc
+9f935c
+9f9370
+5d7440   # randomized bdats (Xenoblade-Series-Randomizer)
+5d755c   # randomized bdats
