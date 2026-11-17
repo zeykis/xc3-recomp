@@ -65,6 +65,7 @@ bool Keys::load_prod(const std::string &path) {
         size_t eq = line.find('=');
         if (eq == std::string::npos) continue;
         std::string k = trim(line.substr(0, eq)), v = trim(line.substr(eq + 1));
+        for (auto &c : k) c = (char)tolower((unsigned char)c);   // (lowercase names: titlekek_0a)
         if (!k.empty() && !v.empty()) named[k] = v;
     }
     uint8_t hk[32];
@@ -223,6 +224,7 @@ bool nca_identify(const Keys &k, const Blob &b, NcaInfo &out) {
     out.type = h[0x205];
     out.size = rd64(h + 0x208);
     out.title = rd64(h + 0x210);
+    { int g = h[0x206] > h[0x220] ? h[0x206] : h[0x220]; out.keygen = g > 0 ? g - 1 : 0; }
     bool rid = false;
     for (int i = 0; i < 16; i++) if (h[0x230 + i]) rid = true;
     out.rights_id = rid ? hex(h + 0x230, 16) : std::string();

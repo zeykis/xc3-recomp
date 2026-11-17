@@ -36,6 +36,7 @@ struct NcaInfo {
     uint64_t title = 0; int type = -1; uint64_t size = 0;
     std::string rights_id;               // 32 hex upper, empty = none (cartridge / no ticket needed)
     bool patch = false;                  // update program (its RomFS section patches the base game's)
+    int keygen = 0;                      // master key revision its keys need (titlekek_XX / key_area_key_application_XX)
 };
 bool nca_identify(const Keys &k, const Blob &b, NcaInfo &out);   // false: not an NCA / no key
 

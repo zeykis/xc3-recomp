@@ -336,6 +336,13 @@ static std::string tk_arg(const nx::Keys &K, const nx::NcaInfo &n) {
 }
 // an NCA that needs a title key Setup doesn't have: why, and what to do
 static std::string missing_titlekey(const nx::Keys &K, const nx::NcaInfo &n, const char *what) {
+    {   // prod.keys too old for this file: it needs the master key revision it was made with
+        char nm[64]; snprintf(nm, sizeof nm, n.rights_id.empty() ? "key_area_key_application_%02x" : "titlekek_%02x", n.keygen);
+        if (!K.named.count(nm))
+            return std::string("prod.keys has no ") + nm + ": the " + what + " was made with a newer firmware's keys (master key " +
+                   fmt("%02x", n.keygen) + "). Dump prod.keys again with Lockpick_RCM from your console on a firmware at least as new "
+                   "as the one the " + what + " needs (a console that has the update installed and has run it has them).";
+    }
     if (n.rights_id.empty() || K.titlekeys.count(n.rights_id)) return "";
     std::string e = std::string("The ") + what + "'s title key is missing (rights id " + n.rights_id + "). ";
     if (K.personalized.count(n.rights_id))
