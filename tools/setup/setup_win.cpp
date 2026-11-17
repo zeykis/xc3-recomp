@@ -446,9 +446,9 @@ static bool install(std::string &err) {
             }
             if (id.empty()) {
                 err = cands.size() > 1 || !cands[0].empty()
-                    ? fmt("Could not decrypt the update with any of the %d title key(s) found for it (see _setup_tmp\\hactool_exefs_u.txt): "
-                          "they don't belong to this update file. Use the update's own ticket (dump it with nxdumptool, \"remove console "
-                          "specific data\" on) or the title.keys of the console it was dumped from.", (int)cands.size())
+                    ? fmt("Could not read the update's code with the %d title key(s) found for it (see _setup_tmp\\hactool_exefs_u.txt: "
+                          "\"Unable to match rights id\" = no matching key; \"Invalid BKTR layout\" = an old hactool.exe, rebuild with "
+                          "build-windows.bat tools).", (int)cands.size())
                     : std::string("Could not decrypt the update (see _setup_tmp\\hactool_exefs_u.txt): check prod.keys / title keys.");
                 return false;
             }

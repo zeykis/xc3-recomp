@@ -4,7 +4,10 @@
 
 Built from https://github.com/SciresM/hactool at commit `1d64a83450e025622f3468c28fc4164dad2c5ef6` (master,
 newer than the 1.4.0 release): 1.4.0 misreads small blocks of encrypted sections ("Invalid BKTR layout!" on the
-2.2.1 update), fixed after it. Build (mingw-w64 GCC 13, static, from that commit):
+2.2.1 update), fixed after it. With one patch, `bktr-layout.patch`: newer updates (2.2.1) keep more tables after
+the BKTR subsection table, which hactool rejected as "Invalid BKTR layout!" and stopped; the check now only requires
+the tables to fit in the section. Build (mingw-w64 GCC 13, static, from that commit with the patch applied:
+`git apply bktr-layout.patch`):
 
 ```
 printf 'CC = x86_64-w64-mingw32-gcc\nAR = x86_64-w64-mingw32-ar\nCFLAGS = -O2 -Wall -std=gnu11\nLDFLAGS = -lmbedtls -lmbedx509 -lmbedcrypto -static\nEXEEXT = .exe\n' > config.mk
