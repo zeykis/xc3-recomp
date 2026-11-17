@@ -14,6 +14,8 @@ namespace nx {
 struct Keys {
     std::map<std::string, std::string> named;          // prod.keys: name -> hex
     std::map<std::string, std::string> titlekeys;      // rights id (32 hex, upper) -> encrypted title key (32 hex)
+    std::map<std::string, std::vector<std::string>> titlekey_alts;   // every different key seen per rights id (title.keys, tickets)
+    void add_titlekey(const std::string &rid, const std::string &key);  // (sets titlekeys too)
     std::set<std::string> personalized;                // rights ids whose only ticket is personalized (console-bound)
     bool load_prod(const std::string &path);           // false: missing / no header_key
     int load_titlekeys(const std::string &path);       // "rights_id = key" lines; returns how many were read

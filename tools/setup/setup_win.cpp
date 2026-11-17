@@ -174,7 +174,7 @@ static void scan_file(nx::Keys &K, Found &F, const fs::path &p, int &n_files) {
                 std::string rid, key;
                 bool pers = false;
                 if (tb.read(0, t.data(), t.size())) {
-                    if (nx::parse_ticket(t, rid, key, &pers)) K.titlekeys[rid] = key;
+                    if (nx::parse_ticket(t, rid, key, &pers)) K.add_titlekey(rid, key);
                     else if (pers) K.personalized.insert(rid);
                 }
             }
@@ -420,9 +420,29 @@ static bool install(std::string &err) {
             if (!materialize(F.update, tmp, "update_program.nca", upd_nca)) { err = "Can't read the update file."; return false; }
             fs::path ex = tmp / L"exefs_update"; fs::remove_all(ex, ec);
             err = missing_titlekey(K, F.update, "update"); if (!err.empty()) return false;
-            hactool(tk_arg(K, F.update) + " --exefsdir=" + quote(u8(ex.wstring())) + " " + quote(upd_nca), tmp / L"hactool_exefs_u.txt", "Reading the update's code", 0, dest);
+            // every title key found for it (title.keys, the .nsp's ticket, an emulator's) until one decrypts it; the base
+            // game is given too (the update's RomFS section only makes sense on top of it)
+            std::vector<std::string> cands;
+            if (!F.update.rights_id.empty()) { auto it = K.titlekey_alts.find(F.update.rights_id); if (it != K.titlekey_alts.end()) cands = it->second; }
+            if (cands.empty()) cands.push_back("");
             std::string id;
-            if (!nx::nso_build_id(u8((ex / L"main").wstring()), id)) { err = "Could not decrypt the update (see _setup_tmp\\hactool_exefs_u.txt): check prod.keys / title keys."; return false; }
+            for (size_t ci = 0; ci < cands.size() && id.empty(); ci++) {
+                fs::remove_all(ex, ec);
+                std::string tk = cands[ci].empty() ? "" : " --titlekey=" + cands[ci];
+                hactool(tk + " --basenca=" + quote(base_nca) + " --exefsdir=" + quote(u8(ex.wstring())) + " " + quote(upd_nca), tmp / L"hactool_exefs_u.txt", "Reading the update's code", 0, dest);
+                if (nx::nso_build_id(u8((ex / L"main").wstring()), id)) {
+                    if (!cands[ci].empty()) K.titlekeys[F.update.rights_id] = cands[ci];   // (the RomFS step uses the same one)
+                    if (cands.size() > 1) log(fmt("  update: title key %d of %d works", (int)ci + 1, (int)cands.size()));
+                } else id.clear();
+            }
+            if (id.empty()) {
+                err = cands.size() > 1 || !cands[0].empty()
+                    ? fmt("Could not decrypt the update with any of the %d title key(s) found for it (see _setup_tmp\\hactool_exefs_u.txt): "
+                          "they don't belong to this update file. Use the update's own ticket (dump it with nxdumptool, \"remove console "
+                          "specific data\" on) or the title.keys of the console it was dumped from.", (int)cands.size())
+                    : std::string("Could not decrypt the update (see _setup_tmp\\hactool_exefs_u.txt): check prod.keys / title keys.");
+                return false;
+            }
             log("Update code build id: " + id.substr(0, 16));
             if (want.empty() || id == want) exefs_dir = ex;
             else log("  this build of xc3.exe needs build id " + want.substr(0, 16) + " (game version 2.2.1)");

@@ -71,6 +71,13 @@ bool Keys::load_prod(const std::string &path) {
     uint8_t hk[32];
     return header_key(hk);
 }
+void Keys::add_titlekey(const std::string &rid, const std::string &key) {
+    std::string r = upper(rid), k = upper(key);
+    auto &v = titlekey_alts[r];
+    bool have = false; for (auto &x : v) if (x == k) have = true;
+    if (!have) v.push_back(k);
+    titlekeys[r] = k;
+}
 int Keys::load_titlekeys(const std::string &path) {
     std::vector<std::string> lines;
     if (!read_lines(path, lines)) return 0;
@@ -80,7 +87,7 @@ int Keys::load_titlekeys(const std::string &path) {
         if (eq == std::string::npos) continue;
         std::string k = upper(trim(line.substr(0, eq))), v = upper(trim(line.substr(eq + 1)));
         uint8_t t[16];
-        if (k.size() == 32 && unhex(v, t, 16)) { titlekeys[k] = v; n++; }
+        if (k.size() == 32 && unhex(v, t, 16)) { add_titlekey(k, v); n++; }
     }
     return n;
 }
