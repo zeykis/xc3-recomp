@@ -49,7 +49,8 @@ files go to `game\` (about 20 GB). Close Setup and the build continues on its ow
 1. **Python**: installs `capstone` (instruction decoder) and `ninja` (build tool) with pip.
 2. **clang**: finds LLVM, including `C:\Program Files\LLVM\bin` if it isn't on PATH.
 3. **Visual Studio**: loads the C++ build environment (linker + Windows SDK); downloads
-   [hactool](https://github.com/SciresM/hactool) for Setup (pinned release, checksum verified).
+   [hactool](https://github.com/SciresM/hactool) is put in `tools\` for Setup (built from its source at a pinned
+   commit, `third_party/hactool`).
 4. **Generated code**: runs `recomp\recompile.py`, which turns `game\main.elf` (with the patches in `patches\`) into
    ~430 MB of C in `gen\` (~1 min).
 5. **Build**: compiles everything into `build-cmake\xc3.exe` (FFmpeg for the cutscenes is downloaded once, pinned and
@@ -284,4 +285,5 @@ are never committed.
 
 The code patches in `patches/` that don't say "xc3-recomp" in their header (60 fps, and the graphics mods in
 `patches/mods/`) are community emulator mods for this executable (their headers say v2.2.0; their @nsobid is the 2.2.1 executable's), kept as their authors published them; credit to their
-authors. hactool (ISC), FFmpeg and Xenoblade-Series-Randomizer are downloaded from their own releases, not included.
+authors. hactool (ISC) is included as a build of its source at a pinned commit (`third_party/hactool/README.md`); FFmpeg
+and Xenoblade-Series-Randomizer are downloaded from their own releases, not included.
