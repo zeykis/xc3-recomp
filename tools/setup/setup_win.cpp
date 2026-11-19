@@ -31,6 +31,12 @@
 #ifndef XC3_MAIN_BUILD_ID   // (built before the game code was generated: the version the patches and hooks are for, 2.2.1)
 #define XC3_MAIN_BUILD_ID "82D187FE9EF9BE921B8E1B1CDDF7BD287CDB22C1"
 #endif
+// build ids are compared on their first 8 bytes (16 hex digits): the NSO header holds 32 bytes, zero-padded, and
+// the id is written with 20, 32 or 8 of them depending on the tool
+static bool same_build(const std::string &a, const std::string &b) {
+    if (a.size() < 16 || b.size() < 16) return a == b;
+    return _strnicmp(a.c_str(), b.c_str(), 16) == 0;
+}
 #pragma comment(linker, "/manifestdependency:\"type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
 
 namespace fs = std::filesystem;
@@ -453,7 +459,7 @@ static bool install(std::string &err) {
                 return false;
             }
             log("Update code build id: " + id.substr(0, 16));
-            if (want.empty() || id == want) exefs_dir = ex;
+            if (want.empty() || same_build(id, want)) exefs_dir = ex;
             else log("  this build of xc3.exe needs build id " + want.substr(0, 16) + " (game version 2.2.1)");
         }
         if (exefs_dir.empty()) {
@@ -461,7 +467,7 @@ static bool install(std::string &err) {
             hactool(tk_arg(K, F.base) + " --exefsdir=" + quote(u8(ex.wstring())) + " " + quote(base_nca), tmp / L"hactool_exefs_b.txt", "Reading the base game's code", 0, dest);
             std::string id;
             if (!nx::nso_build_id(u8((ex / L"main").wstring()), id)) { err = "Could not decrypt the base game (see _setup_tmp\\hactool_exefs_b.txt): check prod.keys."; return false; }
-            if (!want.empty() && id != want) { err = "Your game files are not the version this build was made for (it needs update 2.2.1, build id " + want.substr(0, 16) + "). Add the 2.2.1 update."; return false; }
+            if (!want.empty() && !same_build(id, want)) { err = "Your game files are not the version this build was made for (it needs update 2.2.1, build id " + want.substr(0, 16) + "). Add the 2.2.1 update."; return false; }
             exefs_dir = ex; upd_nca.clear();
         }
         fs::remove_all(game / L"exefs", ec);
@@ -488,7 +494,7 @@ static bool install(std::string &err) {
         if (F.base.blob.off) fs::remove(tmp / L"base_program.nca", ec);
     } else {
         std::string id;
-        if (!nx::nso_build_id(u8((game / L"exefs" / L"main").wstring()), id) || (!want.empty() && id != want)) { err = "The game data in that folder is not the version this build needs: untick \"keep the installed game data\"."; return false; }
+        if (!nx::nso_build_id(u8((game / L"exefs" / L"main").wstring()), id) || (!want.empty() && !same_build(id, want))) { err = "The game data in that folder is not the version this build needs: untick \"keep the installed game data\"."; return false; }
         log("Keeping the installed game data.");
     }
     {
@@ -605,7 +611,7 @@ static void set_busy(bool b) {
 static void check_existing() {
     std::error_code ec; std::string id;
     fs::path g = fs::path(get_text(g_dest)) / L"game";
-    bool ok = nx::nso_build_id(u8((g / L"exefs" / L"main").wstring()), id) && (std::string(XC3_MAIN_BUILD_ID).empty() || id == XC3_MAIN_BUILD_ID) && fs::is_directory(g / L"romfs", ec);
+    bool ok = nx::nso_build_id(u8((g / L"exefs" / L"main").wstring()), id) && (std::string(XC3_MAIN_BUILD_ID).empty() || same_build(id, XC3_MAIN_BUILD_ID)) && fs::is_directory(g / L"romfs", ec);
     EnableWindow(g_skip, ok);
     SendMessageW(g_skip, BM_SETCHECK, ok ? BST_CHECKED : BST_UNCHECKED, 0);
 }
