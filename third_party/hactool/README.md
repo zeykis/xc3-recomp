@@ -4,9 +4,9 @@
 
 Built from https://github.com/SciresM/hactool at commit `1d64a83450e025622f3468c28fc4164dad2c5ef6` (master,
 newer than the 1.4.0 release): 1.4.0 misreads small blocks of encrypted sections ("Invalid BKTR layout!" on the
-2.2.1 update), fixed after it. With one patch, `bktr-layout.patch`: newer updates (2.2.1) keep more tables after
-the BKTR subsection table, which hactool rejected as "Invalid BKTR layout!" and stopped; the check now only requires
-the tables to fit in the section. Build (mingw-w64 GCC 13, static, from that commit with the patch applied:
+2.2.1 update), fixed after it. With one patch, `bktr-layout.patch`, for the newer patch layout of updates such as 2.2.1: more tables follow the
+BKTR subsection table (hactool stopped with "Invalid BKTR layout!"), and the AES-CTR-Ex table covers the data only,
+up to the relocation table (hactool called the section corrupted and extracted nothing). Build (mingw-w64 GCC 13, static, from that commit with the patch applied:
 `git apply bktr-layout.patch`):
 
 ```
