@@ -349,6 +349,19 @@ static std::string tk_arg(const nx::Keys &K, const nx::NcaInfo &n) {
     auto it = K.titlekeys.find(n.rights_id);
     return it == K.titlekeys.end() ? "" : " --titlekey=" + it->second;
 }
+// hactool only takes one title key on its command line (for the file it is given); the base game NCA it reads next
+// to an update needs its own. hactool also reads <HOME>\.switch\title.keys: Setup writes every key it knows there,
+// in its temporary folder, and points HOME at it for the hactool it starts (the player's own files are not touched).
+static void hactool_titlekeys(const nx::Keys &K, const fs::path &tmp) {
+    std::error_code ec;
+    fs::path home = tmp / L"hactool_home", sw = home / L".switch";
+    fs::create_directories(sw, ec);
+    if (FILE *f = nx::xfopen(u8((sw / L"title.keys").wstring()), "wb")) {
+        for (auto &kv : K.titlekeys) fprintf(f, "%s = %s\n", kv.first.c_str(), kv.second.c_str());
+        fclose(f);
+    }
+    SetEnvironmentVariableW(L"HOME", home.c_str());
+}
 // an NCA that needs a title key Setup doesn't have: why, and what to do
 static std::string missing_titlekey(const nx::Keys &K, const nx::NcaInfo &n, const char *what) {
     {   // prod.keys too old for this file: it needs the master key revision it was made with
@@ -435,6 +448,7 @@ static bool install(std::string &err) {
             if (!materialize(F.update, tmp, "update_program.nca", upd_nca)) { err = "Can't read the update file."; return false; }
             fs::path ex = tmp / L"exefs_update"; fs::remove_all(ex, ec);
             err = missing_titlekey(K, F.update, "update"); if (!err.empty()) return false;
+            hactool_titlekeys(K, tmp);
             // every title key found for it (title.keys, the .nsp's ticket, an emulator's) until one decrypts it; the base
             // game is given too (the update's RomFS section only makes sense on top of it)
             std::vector<std::string> cands;
@@ -450,6 +464,7 @@ static bool install(std::string &err) {
                     if (cands.size() > 1) log(fmt("  update: title key %d of %d works", (int)ci + 1, (int)cands.size()));
                 } else id.clear();
             }
+            hactool_titlekeys(K, tmp);   // (with the update's working key)
             if (id.empty()) {
                 err = cands.size() > 1 || !cands[0].empty()
                     ? fmt("Could not read the update's code with the %d title key(s) found for it (see _setup_tmp\\hactool_exefs_u.txt: "
@@ -477,7 +492,8 @@ static bool install(std::string &err) {
         fs::remove_all(game / L"romfs", ec);
         std::string romfs = quote(u8((game / L"romfs").wstring()));
         if (!upd_nca.empty()) {
-            if (F.base.rights_id.empty()) {
+            if (F.base.rights_id.empty() || K.titlekeys.count(F.base.rights_id)) {   // (a base with a title key: from title.keys above)
+                hactool_titlekeys(K, tmp);
                 hactool(tk_arg(K, F.update) + " --basenca=" + quote(base_nca) + " --romfsdir=" + romfs + " " + quote(upd_nca), tmp / L"hactool_romfs.txt", "Extracting the game data (base + update)", F.base.size, dest);
             } else {   // the base needs its own title key: its RomFS goes through a file first
                 fs::path br = tmp / L"base.romfs";
@@ -490,7 +506,7 @@ static bool install(std::string &err) {
         }
         uint64_t nf = dir_files(game / L"romfs");
         log(fmt("Game data: %llu files", (unsigned long long)nf));
-        if (nf < 1000) { err = "Extracting the game data failed (see _setup_tmp\\hactool_romfs.txt)."; return false; }
+        if (nf < 1000) { err = "Extracting the game data failed (see _setup_tmp\\hactool_romfs.txt" + std::string(F.base.rights_id.empty() ? "" : " and hactool_baseromfs.txt") + ")."; return false; }
         if (F.base.blob.off) fs::remove(tmp / L"base_program.nca", ec);
     } else {
         std::string id;
