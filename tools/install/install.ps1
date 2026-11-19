@@ -14,7 +14,8 @@ param(
     [switch]$BuildOnly,   # build-windows.bat: no shortcuts, no bin\, don't start the game
     [switch]$ToolsOnly,   # build-windows.bat tools: Setup + launcher only
     [switch]$NoLaunch,    # don't start the launcher at the end
-    [switch]$Setup        # open XC3 Setup even when the game files are installed (add DLC, reinstall)
+    [switch]$Setup,       # open XC3 Setup even when the game files are installed (add DLC, reinstall)
+    [switch]$Commands     # also print every compiler command (ninja -v); progress and timings are always shown
 )
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'   # (Invoke-WebRequest is many times slower with its progress bar)
@@ -38,7 +39,21 @@ $FF_SHA  = '5cef7bc48e513f3cee7c881e8b2999d835541edb1846c3e89443a67f8f8556ab'
 $GAME_BUILD_ID = '82D187FE9EF9BE92'   # the game executable the code is recompiled from (update 2.2.0 / 2.2.1)
 
 function Say($m)  { Write-Host $m }
-function Step($m) { Write-Host ''; Write-Host "== $m" -ForegroundColor Cyan }
+$Start = Get-Date
+$Timings = New-Object System.Collections.ArrayList
+$StepName = $null; $StepStart = $null
+function Clock { return (Get-Date).ToString('HH:mm:ss') }
+function Since([datetime]$t) { $d = (Get-Date) - $t; return ('{0}:{1:00}' -f [int][math]::Floor($d.TotalMinutes), $d.Seconds) }
+function End-Step {
+    if ($script:StepName) { [void]$script:Timings.Add(('{0,7}  {1}' -f (Since $script:StepStart), $script:StepName)); Write-Host ("   ({0} in {1})" -f $script:StepName, (Since $script:StepStart)) -ForegroundColor DarkGray }
+    $script:StepName = $null
+}
+function Step($m) {
+    End-Step
+    Write-Host ''
+    Write-Host ("== [{0}  +{1}] {2}" -f (Clock), (Since $Start), $m) -ForegroundColor Cyan
+    $script:StepName = $m; $script:StepStart = Get-Date
+}
 function Ok($m)   { Write-Host "   $m" -ForegroundColor Green }
 function Fail($m) {
     Write-Host ''
@@ -47,11 +62,21 @@ function Fail($m) {
     exit 1
 }
 function Run([string]$exe, [string[]]$a, [string]$what) {
+    $shown = ($a | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }) -join ' '
+    Write-Host ("   [{0}] > {1} {2}" -f (Clock), [IO.Path]::GetFileName($exe), $shown) -ForegroundColor DarkGray
+    $t0 = Get-Date
     $old = $ErrorActionPreference; $ErrorActionPreference = 'Continue'   # (tools write warnings to stderr)
     & $exe @a
     $rc = $LASTEXITCODE
     $ErrorActionPreference = $old
-    if ($rc -ne 0) { Fail "$what failed (exit code $rc) - see the messages above." }
+    if ($rc -ne 0) { Fail "$what failed (exit code $rc, after $(Since $t0)) - see the messages above." }
+    Write-Host ("   [{0}] {1}: done in {2}" -f (Clock), $what, (Since $t0)) -ForegroundColor DarkGray
+}
+function Summary {
+    End-Step
+    Write-Host ''
+    Write-Host ("Times (total {0}):" -f (Since $Start)) -ForegroundColor White
+    foreach ($l in $script:Timings) { Write-Host "  $l" }
 }
 function Fwd([string]$p) { return ($p -replace '\\', '/') }
 
@@ -64,7 +89,8 @@ function Get-Pinned([string]$url, [string]$sha, [string]$name) {
     for ($i = 1; $i -le 3; $i++) {
         try {
             if (Test-Path $curl) {
-                & $curl -L --fail --silent --show-error --retry 3 -o $part $url
+                Write-Host "   from $url" -ForegroundColor DarkGray
+                & $curl -L --fail --progress-bar --show-error --retry 3 -o $part $url
                 if ($LASTEXITCODE -ne 0) { throw "curl exit code $LASTEXITCODE" }
             } else {
                 Invoke-WebRequest -Uri $url -OutFile $part -UseBasicParsing
@@ -78,6 +104,7 @@ function Get-Pinned([string]$url, [string]$sha, [string]$name) {
     $h = (Get-FileHash $part -Algorithm SHA256).Hash
     if ($h -ne $sha) { Remove-Item -Force $part; Fail "The download of $name is not the expected file (checksum $h)." }
     Move-Item -Force $part $out
+    Write-Host ("   {0}: {1:N1} MB, checksum OK" -f $name, ((Get-Item $out).Length / 1MB)) -ForegroundColor DarkGray
     return $out
 }
 function Unpack([string]$archive, [string]$dest, [int]$strip = 0) {
@@ -117,7 +144,7 @@ $stamp = Join-Path $T 'python\xc3-packages.txt'
 $want = ($PY_PKGS -join ' ')
 if (!(Test-Path $stamp) -or ((Get-Content $stamp -Raw).Trim() -ne $want)) {
     Say '   Python packages: capstone, CMake, Ninja'
-    Run $Py (@('-m', 'pip', 'install', '--disable-pip-version-check', '--no-warn-script-location', '-q') + $PY_PKGS) 'Installing the Python packages'
+    Run $Py (@('-m', 'pip', 'install', '--disable-pip-version-check', '--no-warn-script-location') + $PY_PKGS) 'Installing the Python packages'
     Set-Content -Path $stamp -Value $want
 }
 $CMake = Join-Path $T 'python\Scripts\cmake.exe'
@@ -145,6 +172,10 @@ Copy-Item -Force (Join-Path $Root 'third_party\hactool\hactool.exe') (Join-Path 
 Ok 'hactool (reads your game dump)'
 
 # ---------------------------------------------------------------- configure
+# Ninja's progress line: [done/total percent elapsed] (NINJA_STATUS); -Commands: every command line too
+$env:NINJA_STATUS = '[%f/%t %p %es] '
+$BuildExtra = @()
+if ($Commands) { $BuildExtra = @('--', '-v') }
 $B = Join-Path $Root 'build-cmake'
 $cache = Join-Path $B 'CMakeCache.txt'
 if ((Test-Path $cache) -and !(Select-String -Path $cache -Pattern 'llvm-mingw' -Quiet)) {
@@ -161,10 +192,10 @@ function Configure {
 # ---------------------------------------------------------------- Setup + launcher
 Step 'Building XC3 Setup and the launcher'
 Configure
-Run $CMake @('--build', $B, '--target', 'xc3-setup', 'xc3-launcher') 'Building Setup'
+Run $CMake (@('--build', $B, '--target', 'xc3-setup', 'xc3-launcher') + $BuildExtra) 'Building Setup'
 Copy-Item -Force (Join-Path $Root 'tools\hactool.exe') (Join-Path $B 'hactool.exe')
 Ok 'build-cmake\xc3-setup.exe, build-cmake\xc3-launcher.exe'
-if ($ToolsOnly) { Ok 'Tools built.'; exit 0 }
+if ($ToolsOnly) { Ok 'Tools built.'; Summary; exit 0 }
 
 # ---------------------------------------------------------------- game files
 function Game-BuildId {
@@ -198,13 +229,13 @@ Step 'Recompiling the game code (about 1-2 minutes)'
 Run $Py @((Join-Path $Root 'recomp\recompile.py')) 'Recompiling'
 Step 'Building xc3.exe (the first time: 10-40 minutes, depending on your CPU; afterwards only what changed)'
 Configure
-Run $CMake @('--build', $B) 'Building'
+Run $CMake (@('--build', $B) + $BuildExtra) 'Building'
 Copy-Item -Force (Join-Path $Root 'tools\hactool.exe') (Join-Path $B 'hactool.exe')
 if (!(Test-Path (Join-Path $B 'xc3.exe'))) {
     Fail 'xc3.exe is missing after the build. If your antivirus removed it, restore it from quarantine or exclude this folder, then run the installer again.'
 }
 Ok 'build-cmake\xc3.exe'
-if ($BuildOnly) { Ok 'Built.'; exit 0 }
+if ($BuildOnly) { Ok 'Built.'; Summary; exit 0 }
 
 # ---------------------------------------------------------------- bin\ + shortcuts
 Step 'Installing (bin\ and shortcuts)'
@@ -230,5 +261,6 @@ Ok "Installed: $launcher"
 Write-Host ''
 Write-Host 'Done. In game: TAB = settings and mods, Alt+Enter = borderless fullscreen.' -ForegroundColor White
 Write-Host 'To update later: run "Install XC3.bat" again. To add DLC: "Install XC3.bat" setup (opens Setup first).'
+Summary
 if (!$NoLaunch) { Start-Process -FilePath $launcher -WorkingDirectory $Bin }
 exit 0
