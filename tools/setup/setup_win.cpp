@@ -506,7 +506,9 @@ static bool install(std::string &err) {
         }
         uint64_t nf = dir_files(game / L"romfs");
         log(fmt("Game data: %llu files", (unsigned long long)nf));
-        if (nf < 1000) { err = "Extracting the game data failed (see _setup_tmp\\hactool_romfs.txt" + std::string(F.base.rights_id.empty() ? "" : " and hactool_baseromfs.txt") + ")."; return false; }
+        // (the game data is ~250 files: the bf3.ard / bf3.arh archive, the movies, the sound banks)
+        uint64_t ard = fs::exists(game / L"romfs" / L"bf3.ard", ec) ? fs::file_size(game / L"romfs" / L"bf3.ard", ec) : 0;
+        if (!fs::exists(game / L"romfs" / L"bf3.arh", ec) || ard < (1ull << 30)) { err = "Extracting the game data failed (see _setup_tmp\\hactool_romfs.txt" + std::string(F.base.rights_id.empty() ? "" : " and hactool_baseromfs.txt") + ")."; return false; }
         if (F.base.blob.off) fs::remove(tmp / L"base_program.nca", ec);
     } else {
         std::string id;
