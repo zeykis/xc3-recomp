@@ -20,52 +20,32 @@ publish them (they are in `.gitignore`).
 
 ## Quick start (Windows)
 
-### 1. Install the tools (one time)
-
-| Tool | Install |
-|---|---|
-| Python 3.10+ | `winget install Python.Python.3.12` |
-| LLVM (clang) | `winget install LLVM.LLVM` |
-| CMake | `winget install Kitware.CMake` |
-| Visual Studio Build Tools (Microsoft linker + Windows SDK) | `winget install Microsoft.VisualStudio.2022.BuildTools --override "--quiet --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"` |
-
-Ninja and the Python packages are installed automatically by the build script. Open a **new**
-terminal after installing anything, so the PATH is updated.
-
-### 2. Build (installs your game files the first time)
-
-```
-build-windows.bat
-```
-
 You need your own copy of the game: the base game (`.xci` / `.nsp`), **update 2.2.1** (`.nsp` / `.nca`; the code is
-recompiled for that exact version) and, if you have them, the DLC, or simply a copy installed in Eden / a
-yuzu-based emulator (found automatically, with its saves), plus `prod.keys` dumped from your own console.
+recompiled for that exact version - 2.2.0 has the same code) and, if you have them, the DLC, or simply a copy
+installed in Eden / a yuzu-based emulator (found automatically, with its keys and saves), plus `prod.keys` from your
+own console. About 30 GB of free space. Windows 10 (1803) or newer.
 
-The first time, when `game\` is still empty, the script builds **XC3 Setup** and opens it: add your files (or drop
-them on the window), pick `prod.keys`, keep the install folder it fills in (this folder) and press *Install*. The game
-files go to `game\` (about 20 GB). Close Setup and the build continues on its own:
+1. Download this repository (**Code → Download ZIP**, then extract it, or `git clone`). A short path without
+   accents works best, e.g. `C:\Games\xc3-recomp`.
+2. Double-click **`Install XC3.bat`**. Nothing has to be installed first: it downloads its tools into `.tools\`
+   (a private Python, CMake, Ninja and the [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) compiler - no Visual
+   Studio, no admin rights; pinned versions, checksums verified), then opens **XC3 Setup**: add your files (or let it
+   find them), keep the install folder it shows and press *Install*. Close Setup and the installer goes on by itself:
+   it recompiles the game code from your dump and builds it (10-40 minutes the first time).
+3. Play: the **Xenoblade Chronicles 3 (recomp)** shortcut (desktop / Start menu) opens the launcher (*Play*, *Play
+   Randomized*). Everything stays in this folder: `game\` (your game files and saves), `bin\` (the program).
 
-1. **Python**: installs `capstone` (instruction decoder) and `ninja` (build tool) with pip.
-2. **clang**: finds LLVM, including `C:\Program Files\LLVM\bin` if it isn't on PATH.
-3. **Visual Studio**: loads the C++ build environment (linker + Windows SDK); downloads
-   [hactool](https://github.com/SciresM/hactool) is put in `tools\` for Setup (built from its source at a pinned
-   commit, `third_party/hactool`).
-4. **Generated code**: runs `recomp\recompile.py`, which turns `game\main.elf` (with the patches in `patches\`) into
-   ~430 MB of C in `gen\` (~1 min).
-5. **Build**: compiles everything into `build-cmake\xc3.exe` (FFmpeg for the cutscenes is downloaded once, pinned and
-   checksum verified). The first build takes 10–30 min depending on your CPU; later builds only recompile what changed.
+Run `Install XC3.bat` again at any time: it continues where it stopped, updates a `git clone` and rebuilds what
+changed. `Install XC3.bat setup` opens Setup first (to add DLC: tick *keep the installed game data*).
+If your antivirus quarantines `xc3.exe` (a large new program), restore it and exclude the folder, then run the
+installer again.
 
-To add DLC later or reinstall: run `build-cmake\xc3-setup.exe` again (tick *keep the installed game data*
-to only add DLC). `build-windows.bat tools` builds just Setup and the launcher.
+### For developers
 
-### 3. Play
-
-```
-make_playable.bat
-```
-
-copies the build to `..\XC3-Playable\`; start **`XC3 Launcher.exe`** there: *Play*, or *Play Randomized* (below).
+`build-windows.bat` runs the same steps without shortcuts (`build-windows.bat tools`: Setup and the launcher only)
+and leaves the program in `build-cmake\`; `make_playable.bat` copies it to `..\XC3-Playable`. The build uses
+`cmake/llvm-mingw.cmake` (also works from Linux, cross-compiling); a Visual Studio + clang build of `CMakeLists.txt`
+still works too.
 
 ### Running it directly
 
@@ -176,13 +156,13 @@ Needs a GPU driver with Vulkan 1.2 (any NVIDIA/AMD/Intel driver from the last fe
 
 | Message | Fix |
 |---|---|
-| `CMake was unable to find a build program corresponding to "Ninja"` | Use `build-windows.bat` instead of calling cmake directly; it installs Ninja and passes its path to CMake. |
-| `\Microsoft was unexpected at this time.` | You have an old copy of `build-windows.bat`. Get the current one (it no longer uses parenthesized blocks around the `Program Files (x86)` path). |
-| `Visual Studio Build Tools not found` / `C++ build tools are missing` | Install the Build Tools command above, or in *Visual Studio Installer* → *Modify* → tick **Desktop development with C++**. |
-| `clang not found` | `winget install LLVM.LLVM`, then open a new terminal. |
-| `game\main.elf missing` | Install the game files (step 2): `build-windows.bat tools`, then `build-cmake\xc3-setup.exe`. |
+| `Could not download ...` | Check the internet connection (GitHub and PyPI must be reachable), then run the installer again: it continues where it stopped. |
+| `... is not the expected file (checksum ...)` | A download was damaged or blocked by a proxy: run the installer again (it downloads it again). |
+| `The game files are not installed` | Setup was closed before *Install* finished: run the installer again to reopen it. |
+| Setup: `Could not decrypt` / title key messages | Use your own `prod.keys` / `title.keys`, or install the update in Eden first (Setup then finds its key). |
+| `The installed game code is not update 2.2.1` | Run `Install XC3.bat setup` and give Setup the 2.2.1 update. |
 | `FATAL: indirect jump to main+0x... which is not a function start` | The game reached code the recompiler didn't know was a function. The address was appended to `game\extra_entries.txt` (read by the next build): run `build-windows.bat` again. Please report it (or add it to `recomp\entries\82D187FE9EF9BE92.txt` in a pull request). |
-| `[fs] missing file rom:/bf3.arh` | The game files aren't installed: run the setup (step 2). |
+| `[fs] missing file rom:/bf3.arh` | The game files aren't installed: run `Install XC3.bat setup`. |
 
 ---
 

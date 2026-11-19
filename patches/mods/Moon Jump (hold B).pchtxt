@@ -1,0 +1,11 @@
+@nsobid-82D187FE9EF9BE921B8E1B1CDDF7BD287CDB22C1
+
+# Xenoblade Chronicles 3 v2.2.0 / 2.2.1 - Moon Jump (xc3-recomp)
+
+@flag offset_shift 0x100
+
+// Hold B (jump) to keep rising instead of falling (XRT_MOON_JUMP=n changes the speed)
+@enabled
+// an object's displacement this frame (st1 {v0.s}[2], [x8]) -> runtime call (hle_nvn.cpp mod_moon_jump)
+00B47D8C 820000D4
+@stop

@@ -1,0 +1,11 @@
+@nsobid-82D187FE9EF9BE921B8E1B1CDDF7BD287CDB22C1
+
+# Xenoblade Chronicles 3 v2.2.0 / 2.2.1 - Fast Run (xc3-recomp)
+
+@flag offset_shift 0x100
+
+// Hold Y to run 10x faster (XRT_FAST_RUN=n changes the factor)
+@enabled
+// the field move controller's speed (fmul s1, s1, s8) -> runtime call (hle_nvn.cpp mod_fast_run)
+00B44DAC 620000D4
+@stop

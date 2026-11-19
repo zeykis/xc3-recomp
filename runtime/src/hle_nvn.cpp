@@ -6,6 +6,7 @@
 // This lets the game's renderer run its real logic end to end; the Vulkan backend (milestone M3)
 // replaces the command handlers below and adds actual rendering + presentation.
 #include <atomic>
+#include "input.h"
 #include <cstring>
 #include <mutex>
 #include <condition_variable>
@@ -1590,13 +1591,51 @@ extern "C" int pad_hold_dt_hook(Ctx *c) {
     if (on < 0) { const char *e = getenv("XRT_MENU_DT"); on = e ? atoi(e) : 1; LOG(1, "[fps] menu cursor repeat follows the frame time: %s", on ? "on" : "off (XRT_MENU_DT=0)"); }
     if (!on || !c->x[1]) return 0;
     static thread_local uint64_t info_q[0x60 / 8]; uint8_t *info = (uint8_t *)info_q;
-    std::memcpy(info, (const void *)(uintptr_t)c->x[1], sizeof info);
+    std::memcpy(info, (const void *)(uintptr_t)c->x[1], sizeof info_q);
     float dt = g_game_dt.load(std::memory_order_relaxed);
     std::memcpy(info + 4, &dt, 4);
     c->x[1] = (uint64_t)(uintptr_t)info;
     return 0;   // (the function runs, with the copy)
 }
+// ---- gameplay mods (patches/mods: "Fast Run (hold Y)", "Moon Jump (hold B)"), switched on in the TAB menu.
+// hvc #3 replaces main+0xb44dac `fmul s1, s1, s8`: the movement speed of the field's move controller.
+static void mod_fast_run(Ctx *c) {
+    static float mul = -1;
+    if (mul < 0) { const char *e = getenv("XRT_FAST_RUN"); mul = e ? (float)atof(e) : 10.0f; if (!(mul > 0)) mul = 10.0f; LOG(1, "[mods] fast run: x%g while Y is held", mul); }
+    float v = c->v[1].f[0] * c->v[8].f[0];
+    if (input_buttons() & (1ull << 3)) v *= mul;   // (Npad Y)
+    SET_S(1, v);
+}
+// hvc #4 replaces main+0xb47d8c `st1 {v0.s}[2], [x8]`: an object's displacement this frame is built at sp+0x30
+// (x, y = up at +0x34, z). While B (jump) is held, the player's falling is turned into rising. The player is the
+// object type that goes up right after B is pressed (a jump), learned once; type = the vtable of x19+0x10 -> +0x10.
+static void mod_moon_jump(Ctx *c) {
+    *(float *)(uintptr_t)c->x[8] = c->v[0].f[2];   // (the replaced instruction)
+    static uint64_t player = 0, best_key = 0, learn_until = 0, last_frame = 0; static float best_dy = 0; static bool b_prev = false;
+    uint64_t frame = g_game_frames;
+    bool b = (input_buttons() & (1ull << 1)) != 0;   // (Npad B)
+    if (frame != last_frame) {   // once a frame: a new press opens a learning window
+        if (b && !b_prev && !player) { learn_until = frame + 40; best_dy = 0; best_key = 0; }
+        if (learn_until && frame > learn_until) {
+            if (best_key && best_dy > 0.01f) { player = best_key; LOG(1, "[mods] moon jump: player type main+0x%llx", (unsigned long long)(player - (uint64_t)(uintptr_t)g_img.base)); }
+            learn_until = 0;
+        }
+        b_prev = b; last_frame = frame;
+    }
+    uint64_t key = 0, o = c->x[19];
+    if (o) { uint64_t p1 = *(const uint64_t *)(uintptr_t)(o + 0x10); if (p1) { uint64_t p2 = *(const uint64_t *)(uintptr_t)(p1 + 0x10); if (p2) key = *(const uint64_t *)(uintptr_t)p2; } }
+    if (!key) return;
+    float *dy = (float *)(uintptr_t)(c->x[31] + 0x34);
+    if (learn_until && *dy > best_dy) { best_dy = *dy; best_key = key; }
+    if (b && key == player && *dy < 0) {
+        static float rise = -1;
+        if (rise < 0) { const char *e = getenv("XRT_MOON_JUMP"); rise = e ? (float)atof(e) : 0.4f; }
+        *dy = rise * g_game_dt.load(std::memory_order_relaxed) * 30.0f;   // (0.4 a frame at 30 fps)
+    }
+}
 extern "C" void xrt_hvc(Ctx *c, uint64_t imm) {
+    if (imm == 3) { mod_fast_run(c); return; }
+    if (imm == 4) { mod_moon_jump(c); return; }
     static int mode = -1;
     if (mode < 0) { const char *e = getenv("XRT_UI_DT"); mode = e ? atoi(e) : 1; LOG(1, "[fps] fixed-step timers follow the frame time: %s", mode ? "on" : "off (XRT_UI_DT=0)"); }
     // the 60 fps mode flag of the game (latched once a frame; the 60fps patch reads the same byte)

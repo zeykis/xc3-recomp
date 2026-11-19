@@ -131,6 +131,11 @@ static LONG WINAPI crash_filter(EXCEPTION_POINTERS *e) {
 // minidump goes next to the log (crash.dmp).
 #include <dbghelp.h>
 #include <intrin.h>
+#ifdef _MSC_VER
+#define RETURN_ADDRESS() _ReturnAddress()
+#else
+#define RETURN_ADDRESS() __builtin_return_address(0)
+#endif
 #include <csignal>
 #include <exception>
 #pragma comment(lib, "dbghelp.lib")
@@ -146,7 +151,7 @@ static void write_minidump(EXCEPTION_POINTERS *e) {
 }
 static void fatal_report(const char *what) {
     static volatile LONG once; if (InterlockedExchange(&once, 1)) { std::fflush(stderr); return; }
-    xrt_crash_report(what, (uintptr_t)_ReturnAddress(), 0);
+    xrt_crash_report(what, (uintptr_t)RETURN_ADDRESS(), 0);
     write_minidump(nullptr);
     std::fflush(stderr); std::fflush(stdout);
 }

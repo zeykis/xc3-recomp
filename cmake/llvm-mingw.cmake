@@ -1,0 +1,31 @@
+# Toolchain: llvm-mingw (clang + lld + mingw-w64, UCRT), the portable compiler the installer downloads into
+# .tools\llvm-mingw - no Visual Studio needed. Also works on Linux (cross-compiling for Windows).
+#   cmake -B build-mingw -G Ninja -DCMAKE_TOOLCHAIN_FILE=cmake/llvm-mingw.cmake -DLLVM_MINGW_ROOT=<folder>
+set(CMAKE_SYSTEM_NAME Windows)
+set(CMAKE_SYSTEM_PROCESSOR x86_64)
+if(NOT LLVM_MINGW_ROOT)
+  set(LLVM_MINGW_ROOT "$ENV{LLVM_MINGW_ROOT}")
+endif()
+if(NOT LLVM_MINGW_ROOT)
+  message(FATAL_ERROR "Set LLVM_MINGW_ROOT to the llvm-mingw folder")
+endif()
+set(LLVM_MINGW_ROOT "${LLVM_MINGW_ROOT}" CACHE PATH "llvm-mingw folder" FORCE)
+set(ENV{LLVM_MINGW_ROOT} "${LLVM_MINGW_ROOT}")
+list(APPEND CMAKE_TRY_COMPILE_PLATFORM_VARIABLES LLVM_MINGW_ROOT)   # (CMake's compiler checks run this file again)
+if(CMAKE_HOST_WIN32)
+  set(_x .exe)
+endif()
+set(CMAKE_C_COMPILER   "${LLVM_MINGW_ROOT}/bin/x86_64-w64-mingw32-clang${_x}")
+set(CMAKE_CXX_COMPILER "${LLVM_MINGW_ROOT}/bin/x86_64-w64-mingw32-clang++${_x}")
+set(CMAKE_RC_COMPILER  "${LLVM_MINGW_ROOT}/bin/x86_64-w64-mingw32-windres${_x}")
+set(CMAKE_AR           "${LLVM_MINGW_ROOT}/bin/llvm-ar${_x}" CACHE FILEPATH "" FORCE)
+set(CMAKE_RANLIB       "${LLVM_MINGW_ROOT}/bin/llvm-ranlib${_x}" CACHE FILEPATH "" FORCE)
+set(CMAKE_FIND_ROOT_PATH "${LLVM_MINGW_ROOT}/x86_64-w64-mingw32")
+set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+# one self-contained .exe each (libc++ / libunwind linked in; FFmpeg stays DLLs); debug info in a .pdb next to it
+# (CodeView, like the Visual Studio build: crash reports name runtime functions through it), not inside the .exe
+set(CMAKE_C_FLAGS_INIT "-gcodeview")
+set(CMAKE_CXX_FLAGS_INIT "-gcodeview")
+set(CMAKE_EXE_LINKER_FLAGS_INIT "-static -Wl,--pdb=")

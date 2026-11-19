@@ -8,6 +8,8 @@ work221/
 reference/
 analysis/
 # build outputs and downloads
+.tools/
+bin/
 build/
 build-*/
 dist/
