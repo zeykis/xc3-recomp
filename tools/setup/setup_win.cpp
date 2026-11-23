@@ -416,12 +416,15 @@ static bool install(std::string &err) {
     if (!fs::exists(g_hactool, ec)) { err = "hactool.exe is missing next to the installer."; return false; }
     // Built from the source (build-cmake\, no xc3.exe yet): only the game files are installed, into <folder>\game;
     // build-windows.bat then recompiles game\main.elf into xc3.exe.
-    const bool data_only = !fs::exists(payload / L"xc3.exe", ec);
-    if (data_only) log("No xc3.exe next to Setup: installing the game files only (for building from the source).");
+    const bool from_source = fs::exists(exe_dir.parent_path() / L"recomp" / L"recompile.py", ec);   // (build-cmake\ or bin\ of a source folder)
+    const bool data_only = from_source || !fs::exists(payload / L"xc3.exe", ec);
+    if (data_only) log(from_source ? "Started from the source folder: installing the game files only (the installer builds and installs the program)."
+                                   : "No xc3.exe next to Setup: installing the game files only (for building from the source).");
     g_keys_path = get_text(g_keys);
     fs::path dest = get_text(g_dest);
     if (dest.empty()) { err = "Choose an install folder."; return false; }
     fs::path game = dest / L"game", tmp = dest / L"_setup_tmp";
+    bool dlc_failed = false;   // (then _setup_tmp and its hactool logs stay)
     const std::string want = XC3_MAIN_BUILD_ID;
     const bool skip_data = SendMessageW(g_skip, BM_GETCHECK, 0, 0) == BST_CHECKED;
     fs::create_directories(game, ec);
@@ -524,9 +527,23 @@ static bool install(std::string &err) {
             if (!d.second.rights_id.empty() && !K.titlekeys.count(d.second.rights_id)) { log(fmt("DLC %d skipped: no title key", d.first)); continue; }
             std::string nca;
             if (!materialize(d.second, tmp, fmt("dlc%d.nca", d.first), nca)) { log(fmt("DLC %d: can't read the file", d.first)); continue; }
-            fs::path out = game / L"aoc" / std::to_wstring(d.first) / L"romfs"; fs::remove_all(out, ec);
-            hactool(tk_arg(K, d.second) + " --romfsdir=" + quote(u8(out.wstring())) + " " + quote(nca), tmp / wide(fmt("hactool_dlc%d.txt", d.first)), fmt("Extracting DLC %d", d.first), d.second.size, dest);
-            log(fmt("DLC %d: %llu files", d.first, (unsigned long long)dir_files(out)));
+            fs::path out = game / L"aoc" / std::to_wstring(d.first) / L"romfs";
+            // every title key known for it (title.keys, the .nsp's ticket, the emulators') until one gives files
+            std::vector<std::string> cands;
+            if (!d.second.rights_id.empty()) { auto it = K.titlekey_alts.find(d.second.rights_id); if (it != K.titlekey_alts.end()) cands = it->second; }
+            if (cands.empty()) cands.push_back("");
+            uint64_t nf = 0;
+            for (size_t ci = 0; ci < cands.size() && !nf; ci++) {
+                fs::remove_all(out, ec);
+                fs::create_directories(out.parent_path(), ec);   // (hactool makes only the last folder of --romfsdir)
+                std::string tk = cands[ci].empty() ? "" : " --titlekey=" + cands[ci];
+                hactool(tk + " --romfsdir=" + quote(u8(out.wstring())) + " " + quote(nca), tmp / wide(fmt("hactool_dlc%d.txt", d.first)), fmt("Extracting DLC %d", d.first), d.second.size, dest);
+                nf = dir_files(out);
+                if (nf && cands.size() > 1) log(fmt("  DLC %d: title key %d of %d works", d.first, (int)ci + 1, (int)cands.size()));
+            }
+            log(fmt("DLC %d: %llu files", d.first, (unsigned long long)nf));
+            if (!nf) { fs::remove_all(game / L"aoc" / std::to_wstring(d.first), ec); dlc_failed = true;
+                       log(fmt("  DLC %d could not be extracted: see _setup_tmp\\hactool_dlc%d.txt (kept)", d.first, d.first)); }
             if (d.second.blob.off) fs::remove(nca, ec);
         }
         // executables -> ELF
@@ -545,7 +562,7 @@ static bool install(std::string &err) {
     }
 
     if (data_only) {
-        fs::remove_all(tmp, ec);
+        if (!dlc_failed) fs::remove_all(tmp, ec);
         log("Game files installed to " + u8(game.wstring()) + ". Next: build-windows.bat (in that folder if it is the source folder).");
         return true;
     }
@@ -593,7 +610,7 @@ static bool install(std::string &err) {
         bool b = make_link(fs::path(known(FOLDERID_Programs)) / L"Xenoblade Chronicles 3 (recomp).lnk", tgt, wd, args, L"Xenoblade Chronicles 3 (recompiled)");
         log(a || b ? "Shortcuts: desktop and Start menu" : "Couldn't make the shortcuts");
     }
-    fs::remove_all(tmp, ec);
+    if (!dlc_failed) fs::remove_all(tmp, ec);
     log("Installed to " + u8(dest.wstring()));
     return true;
 }

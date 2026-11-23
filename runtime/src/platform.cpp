@@ -178,9 +178,81 @@ static LONG CALLBACK fatal_veh(EXCEPTION_POINTERS *e) {
     return EXCEPTION_CONTINUE_SEARCH;
 }
 static LONG WINAPI crash_filter_dump(EXCEPTION_POINTERS *e) { LONG r = crash_filter(e); write_minidump(e); std::fflush(stderr); return r; }
+// Reads (and writes) of the guest's null page, like Eden / yuzu do: the Switch never maps the first pages, and an
+// emulator answers an unmapped read with 0 and ignores an unmapped write - so game data that makes the game look at a
+// missing table (randomizer seeds, mods: a table of a DLC that isn't installed ...) only crashes here. When recompiled
+// code touches an address below 64 KB, the base (or index) register of the instruction is pointed at a zeroed block
+// for that one instruction (single step), then put back if the instruction didn't load into it: the instruction reads
+// zeros / its write is discarded, and the game carries on as it does in the emulators. XRT_NULL_READS=0: crash instead.
+extern "C" void xrt_describe_host_pc(uintptr_t pc, char *out, size_t n);
+static uint8_t *g_zero_block;                 // 128 KB: covers base 0..64 KB + displacement
+static uintptr_t g_code_lo, g_code_hi;        // xc3.exe's code
+static thread_local int t_nr_reg = -1; static thread_local DWORD64 t_nr_orig, t_nr_moved; static thread_local bool t_nr_write;
+static std::atomic<int> g_nr_logged{0};
+static LONG CALLBACK null_read_veh(EXCEPTION_POINTERS *e) {
+    CONTEXT *c = e->ContextRecord;
+    DWORD code = e->ExceptionRecord->ExceptionCode;
+    DWORD64 *regs = &c->Rax;   // (Rax, Rcx, Rdx, Rbx, Rsp, Rbp, Rsi, Rdi, R8 .. R15: register number order)
+    if (code == EXCEPTION_SINGLE_STEP && t_nr_reg >= 0) {
+        if (regs[t_nr_reg] == t_nr_moved) regs[t_nr_reg] = t_nr_orig;   // (not the instruction's destination: put back)
+        if (t_nr_write) std::memset(g_zero_block, 0, 1 << 17);
+        t_nr_reg = -1;
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+    if (code != EXCEPTION_ACCESS_VIOLATION || !g_zero_block || e->ExceptionRecord->NumberParameters < 2) return EXCEPTION_CONTINUE_SEARCH;
+    uintptr_t fault = (uintptr_t)e->ExceptionRecord->ExceptionInformation[1], rip = (uintptr_t)c->Rip;
+    if (fault >= 0x10000 || rip < g_code_lo || rip >= g_code_hi) return EXCEPTION_CONTINUE_SEARCH;
+    // decode up to the ModRM byte: legacy prefixes, REX, opcode (1 byte, 0F xx, 0F 38 xx, 0F 3A xx)
+    const uint8_t *p = (const uint8_t *)rip; uint8_t rex = 0; int n = 0;
+    while (n < 15) {
+        uint8_t b = p[n];
+        if (b == 0x66 || b == 0x67 || b == 0xF2 || b == 0xF3 || b == 0xF0 || b == 0x2E || b == 0x3E || b == 0x26 || b == 0x36 || b == 0x64 || b == 0x65) { n++; continue; }
+        break;
+    }
+    if ((p[n] & 0xF0) == 0x40) rex = p[n++];
+    uint8_t op = p[n++];
+    if (op == 0x0F) { op = p[n++]; if (op == 0x38 || op == 0x3A) n++; }
+    else if (op >= 0xA0 && op <= 0xAF) return EXCEPTION_CONTINUE_SEARCH;   // (moffs / string forms: no ModRM)
+    uint8_t modrm = p[n++];
+    int mod = modrm >> 6, rm = modrm & 7;
+    if (mod == 3) return EXCEPTION_CONTINUE_SEARCH;
+    int base = -1, index = -1;
+    if (rm == 4) {
+        uint8_t sib = p[n++];
+        base = (sib & 7) | ((rex & 1) << 3);
+        index = ((sib >> 3) & 7) | ((rex & 2) << 2);
+        if (index == 4) index = -1;                                    // (no index)
+        if ((sib & 7) == 5 && mod == 0) base = -1;                     // (disp32, no base)
+    } else if (rm == 5 && mod == 0) return EXCEPTION_CONTINUE_SEARCH;  // (RIP-relative)
+    else base = rm | ((rex & 1) << 3);
+    int reg = -1;
+    if (base >= 0 && base != 4 && regs[base] < 0x10000) reg = base;
+    else if (index >= 0 && regs[index] < 0x10000) reg = index;
+    if (reg < 0) return EXCEPTION_CONTINUE_SEARCH;
+    static int on = -1;
+    if (on < 0) { const char *v = getenv("XRT_NULL_READS"); on = v ? atoi(v) : 1; }
+    if (!on) return EXCEPTION_CONTINUE_SEARCH;
+    t_nr_reg = reg; t_nr_orig = regs[reg]; t_nr_moved = (DWORD64)(uintptr_t)g_zero_block + regs[reg]; t_nr_write = e->ExceptionRecord->ExceptionInformation[0] == 1;
+    regs[reg] = t_nr_moved;
+    c->EFlags |= 0x100;   // (trap flag: back here after the instruction)
+    int k = g_nr_logged.fetch_add(1);
+    if (k < 8 || (k & (k - 1)) == 0) {
+        char where[200]; xrt_describe_host_pc(rip, where, sizeof where);
+        std::fprintf(stderr, "[mem] guest %s of address 0x%llx (null page) at %s: %s, like the emulators (%d so far; XRT_NULL_READS=0 to crash)\n",
+                     t_nr_write ? "write" : "read", (unsigned long long)fault, where, t_nr_write ? "ignored" : "reads 0", k + 1);
+    }
+    return EXCEPTION_CONTINUE_EXECUTION;
+}
 extern "C" void plat_install_crash_handler(void) {
     SetUnhandledExceptionFilter(crash_filter_dump);
     AddVectoredExceptionHandler(1, fatal_veh);
+    {
+        g_zero_block = (uint8_t *)VirtualAlloc(nullptr, 1 << 17, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        HMODULE m = GetModuleHandleW(nullptr);
+        const IMAGE_NT_HEADERS *nt = (const IMAGE_NT_HEADERS *)((const uint8_t *)m + ((const IMAGE_DOS_HEADER *)m)->e_lfanew);
+        g_code_lo = (uintptr_t)m; g_code_hi = (uintptr_t)m + nt->OptionalHeader.SizeOfImage;
+        AddVectoredExceptionHandler(1, null_read_veh);   // (first: before the crash handlers see it)
+    }
     std::set_terminate(on_terminate);
     std::signal(SIGABRT, on_abort);
     _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
