@@ -191,4 +191,12 @@ bool gpu_translate_program(const uint8_t *const code[GS_COUNT], const uint8_t *c
 }
 
 // identifies this translator build: the translated-shader cache on disk is dropped when it changes (gpu_vk_draw.inc)
-const char *gpu_shader_version() { return "xc3-sc-1 " __DATE__ " " __TIME__; }
+// shader_cache.bin is kept while this is the same: the translator's source id (CMake) - not the build time any more
+// (every rebuild started the cache over). Bump "xc3-sc-N" when what the runtime feeds the translator changes.
+#if __has_include("shader_version.h")
+#include "shader_version.h"
+#endif
+#ifndef XC3_SHADER_TRANSLATOR_ID
+#define XC3_SHADER_TRANSLATOR_ID __DATE__ " " __TIME__
+#endif
+const char *gpu_shader_version() { return "xc3-sc-2 " XC3_SHADER_TRANSLATOR_ID; }

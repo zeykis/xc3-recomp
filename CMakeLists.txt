@@ -120,6 +120,12 @@ target_compile_options(xc3shader PRIVATE -w)
 if(XC3_HAVE_GEN)
   target_sources(xc3 PRIVATE runtime/src/gpu_shader.cpp)
   target_link_libraries(xc3 PRIVATE xc3shader)
+  # shader_version.h: an id of the translator's source, for shader_cache.bin (cmake/shader_version.cmake)
+  add_custom_target(xc3_shader_version ALL
+    COMMAND ${CMAKE_COMMAND} -DROOT=${CMAKE_SOURCE_DIR} -DOUT=${CMAKE_BINARY_DIR}/generated/shader_version.h -P ${CMAKE_SOURCE_DIR}/cmake/shader_version.cmake
+    BYPRODUCTS ${CMAKE_BINARY_DIR}/generated/shader_version.h)
+  add_dependencies(xc3 xc3_shader_version)
+  target_include_directories(xc3 PRIVATE ${CMAKE_BINARY_DIR}/generated)
 endif()
 
 # xc3-shaderc: translate shaders captured with XRT_DUMP_SHADERS=1 and report coverage

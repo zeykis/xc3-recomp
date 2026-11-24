@@ -33,8 +33,8 @@ namespace fs = std::filesystem;
 static const wchar_t *k_rz_url = L"https://github.com/SonahSofern/Xenoblade-Series-Randomizer/releases/download/1.4.2/XCRandomizer_1.4.2.zip";
 static const wchar_t *k_rz_exe = L"XCRandomizer_1.4.2.exe";
 static const char *k_rz_sha = "41c703caf989068c8d435fdb7a10a309027a0e4ecaa270eb54b5565f4979c8d3";
-enum { WM_RZ_DONE = WM_APP + 1 };
-enum { ID_PLAY = 100, ID_PLAYR, ID_RANDO, ID_COPY, ID_OPENMODS, ID_CLOSE, ID_STATUS_R, ID_STATUS_S };
+enum { WM_RZ_DONE = WM_APP + 1, WM_UPD_DONE };
+enum { ID_PLAY = 100, ID_PLAYR, ID_RANDO, ID_COPY, ID_OPENMODS, ID_CLOSE, ID_STATUS_R, ID_STATUS_S, ID_UPDATE, ID_STATUS_U };
 static HWND g_wnd, g_rstat, g_sstat, g_close;
 static HFONT g_font, g_big;
 static fs::path g_dir, g_game, g_exe, g_ini;
@@ -219,6 +219,49 @@ static void copy_path() {
     CloseClipboard();
 }
 
+// ---------------------------------------------------------------- updates
+// In an installed copy (the launcher in <source folder>\bin), the source folder's version (.tools\source-commit.txt,
+// written by the installer) is compared with the latest on GitHub; "Update" runs Update XC3.bat (it gets the new
+// source, rebuilds what changed and installs it into bin\, so the launcher closes first).
+static const wchar_t *k_repo_api = L"https://api.github.com/repos/zeykis/xc3-recomp/commits/main";
+static fs::path g_src;   // the source folder (has Update XC3.bat), or empty
+static HWND g_ustat, g_ubtn;
+static bool g_upd_avail;
+struct UpdInfo { std::wstring local, remote, msg; bool ok = false; };
+static std::wstring read_text(const fs::path &p) {
+    std::wstring out; FILE *f = _wfopen(p.c_str(), L"rb"); if (!f) return out;
+    char b[4096]; size_t n = fread(b, 1, sizeof b - 1, f); fclose(f); b[n] = 0;
+    for (size_t i = 0; i < n; i++) if (b[i] > ' ') out += (wchar_t)b[i];
+    return out;
+}
+static void upd_check() {   // (thread) posts WM_UPD_DONE with an UpdInfo*
+    auto *u = new UpdInfo;
+    u->local = read_text(g_src / L".tools" / L"source-commit.txt");
+    wchar_t tmp[MAX_PATH]; GetTempPathW(MAX_PATH, tmp);
+    fs::path jf = fs::path(tmp) / L"xc3-latest.json";
+    if (URLDownloadToFileW(nullptr, k_repo_api, jf.c_str(), BINDF_GETNEWESTVERSION, nullptr) == S_OK) {
+        std::string j; if (FILE *f = _wfopen(jf.c_str(), L"rb")) { char b[8192]; size_t n; while ((n = fread(b, 1, sizeof b, f)) > 0) j.append(b, n); fclose(f); }
+        auto field = [&](const char *name, size_t from) -> std::pair<std::string, size_t> {
+            size_t k = j.find(name, from); if (k == std::string::npos) return {"", k};
+            size_t q1 = j.find('"', j.find(':', k) + 1); size_t q2 = q1;
+            while (q2 != std::string::npos && (q2 = j.find('"', q2 + 1)) != std::string::npos && j[q2 - 1] == '\\') {}
+            return q2 == std::string::npos ? std::make_pair(std::string(), q2) : std::make_pair(j.substr(q1 + 1, q2 - q1 - 1), q2);
+        };
+        auto sha = field("\"sha\"", 0);
+        auto msg = field("\"message\"", 0);
+        std::string m = msg.first; size_t nl = m.find("\\n"); if (nl != std::string::npos) m = m.substr(0, nl);
+        if (sha.first.size() == 40) { u->remote.assign(sha.first.begin(), sha.first.end()); u->ok = true;
+            int n = MultiByteToWideChar(CP_UTF8, 0, m.c_str(), -1, nullptr, 0); if (n > 1) { u->msg.resize(n - 1); MultiByteToWideChar(CP_UTF8, 0, m.c_str(), -1, &u->msg[0], n); } }
+        DeleteFileW(jf.c_str());
+    }
+    PostMessageW(g_wnd, WM_UPD_DONE, 0, (LPARAM)u);
+}
+static void upd_start() {
+    if (g_src.empty()) return;
+    SetWindowTextW(g_ustat, L"Checking for updates...");
+    EnableWindow(g_ubtn, FALSE);
+    std::thread(upd_check).detach();
+}
 static HWND mk(const wchar_t *cls, const wchar_t *txt, DWORD style, int x, int y, int w, int h, int id, HFONT f = nullptr) {
     HWND c = CreateWindowExW(0, cls, txt, WS_CHILD | WS_VISIBLE | style, x, y, w, h, g_wnd, (HMENU)(INT_PTR)id, GetModuleHandleW(nullptr), nullptr);
     SendMessageW(c, WM_SETFONT, (WPARAM)(f ? f : g_font), TRUE);
@@ -233,8 +276,26 @@ static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l) {
         case ID_RANDO: run_randomizer(); return 0;
         case ID_COPY: copy_path(); SetWindowTextW(g_rstat, (L"Copied: " + rando_dir().wstring()).c_str()); return 0;
         case ID_OPENMODS: ensure_profile(); ShellExecuteW(g_wnd, L"open", rando_dir().c_str(), nullptr, nullptr, SW_SHOWNORMAL); return 0;
+        case ID_UPDATE:
+            if (!g_upd_avail) { upd_start(); return 0; }
+            if (MessageBoxW(g_wnd, L"Update now?\n\nThe launcher closes and a window gets the new version from GitHub, rebuilds what changed "
+                                   L"(usually a few minutes) and installs it. Your game files, saves and settings stay.",
+                            L"XC3 Launcher", MB_OKCANCEL | MB_ICONQUESTION) != IDOK) return 0;
+            if ((INT_PTR)ShellExecuteW(g_wnd, L"open", (g_src / L"Update XC3.bat").c_str(), nullptr, g_src.c_str(), SW_SHOWNORMAL) > 32) PostMessageW(g_wnd, WM_CLOSE, 0, 0);
+            return 0;
         }
         break;
+    case WM_UPD_DONE: {
+        std::unique_ptr<UpdInfo> u((UpdInfo *)l);
+        EnableWindow(g_ubtn, TRUE);
+        if (!u->ok) { SetWindowTextW(g_ustat, L"Updates: GitHub could not be reached."); SetWindowTextW(g_ubtn, L"Check for updates"); g_upd_avail = false; return 0; }
+        g_upd_avail = u->local != u->remote;
+        std::wstring t = g_upd_avail ? L"Update available: " + u->msg + (u->local.empty() ? L"" : L"  (installed " + u->local.substr(0, 7) + L")")
+                                     : L"Up to date (" + u->remote.substr(0, 7) + L").";
+        SetWindowTextW(g_ustat, t.c_str());
+        SetWindowTextW(g_ubtn, g_upd_avail ? L"Update now..." : L"Check for updates");
+        return 0;
+    }
     case WM_RZ_DONE: {
         g_rz_busy = false;
         EnableWindow(GetDlgItem(g_wnd, ID_RANDO), TRUE);
@@ -277,7 +338,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
     wc.hIcon = LoadIcon(nullptr, IDI_APPLICATION);
     RegisterClassW(&wc);
     const int W = S(560), x = S(16);
-    RECT r{0, 0, W + 2 * x, S(392)}; AdjustWindowRect(&r, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX, FALSE);
+    { std::error_code e2; fs::path sd = g_dir.parent_path(); if (fs::exists(sd / L"Update XC3.bat", e2)) g_src = sd; }
+    RECT r{0, 0, W + 2 * x, S(g_src.empty() ? 392 : 434)}; AdjustWindowRect(&r, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX, FALSE);
     g_wnd = CreateWindowExW(0, wc.lpszClassName, L"Xenoblade Chronicles 3 (recomp)", WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
                             CW_USEDEFAULT, CW_USEDEFAULT, r.right - r.left, r.bottom - r.top, nullptr, nullptr, inst, nullptr);
     int y = S(14);
@@ -296,10 +358,16 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
     mk(L"BUTTON", L"Show the files", BS_PUSHBUTTON, x + 2 * (b3 + S(12)), y, b3, S(30), ID_OPENMODS); y += S(40);
     mk(L"STATIC", L"New seed: run the randomizer again (same output folder), then Play Randomized.", SS_LEFT, x, y, W, S(20), -1); y += S(30);
     g_close = mk(L"BUTTON", L"Close this window when the game starts", BS_AUTOCHECKBOX, x, y, W, S(22), ID_CLOSE); y += S(26);
-    mk(L"STATIC", L"In game: TAB = settings, Alt+Enter = borderless fullscreen.", SS_LEFT, x, y, W, S(20), -1);
+    mk(L"STATIC", L"In game: TAB = settings, Alt+Enter = borderless fullscreen.", SS_LEFT, x, y, W, S(20), -1); y += S(30);
+    if (!g_src.empty()) {
+        int bu = S(150);
+        g_ubtn = mk(L"BUTTON", L"Check for updates", BS_PUSHBUTTON, x, y, bu, S(28), ID_UPDATE);
+        g_ustat = mk(L"STATIC", L"", SS_LEFT | SS_ENDELLIPSIS, x + bu + S(12), y + S(5), W - bu - S(12), S(20), ID_STATUS_U);
+    }
     std::wstring cs = ini_get(L"close_on_start");
     SendMessageW(g_close, BM_SETCHECK, cs == L"0" ? BST_UNCHECKED : BST_CHECKED, 0);
     refresh();
+    upd_start();
     ShowWindow(g_wnd, show);
     MSG msg;
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) { if (!IsDialogMessageW(g_wnd, &msg)) { TranslateMessage(&msg); DispatchMessageW(&msg); } }

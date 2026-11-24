@@ -709,6 +709,8 @@ struct ProgObj {
     VkPipelineLayout layout = VK_NULL_HANDLE;
     VkShaderStageFlags pc_stages = 0;
     bool dyn_ubo = false;   // uniform buffers bound with dynamic offsets (descriptor sets reusable across draws)
+    uint64_t pid = 0;       // content id of desc (desc_hash): the same program found again (or warmed up) is shared
+    ProgObj *alias = nullptr;   // this draw-state key uses the shared program with the same content
 };
 static KeyCache<std::unique_ptr<ProgObj>> g_progs;
 static const VkShaderStageFlagBits k_vk_stage[GS_COUNT] = {VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT,
@@ -914,6 +916,35 @@ static bool scache_matches(const std::vector<SQuery> &qs, bool *subst_out) {
     return true;
 }
 
+// ---------------------------------------------------------------- shared programs (M5: stutter)
+// A program is identified by its content (SPIR-V, bindings, flags), not by the draw state that asked for it: draws
+// that come to the same translation share one ProgObj and so one set of pipelines, and the warm-up below can make
+// programs and pipelines before the game asks for them.
+static uint64_t mix64(uint64_t h, uint64_t v) { h ^= v + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2); return h * 0xff51afd7ed558ccdULL; }
+static uint64_t desc_hash(const ShaderProgramDesc &d) {
+    uint64_t h = 0x5843335052474d31ULL;   // "XC3PRGM1"
+    for (int st = 0; st < GS_COUNT; st++) {
+        h = mix64(h, d.spirv[st].size());
+        const uint32_t *w = d.spirv[st].data(); size_t n = d.spirv[st].size(), i = 0;
+        for (; i + 1 < n; i += 2) h = mix64(h, (uint64_t)w[i] | ((uint64_t)w[i + 1] << 32));
+        if (i < n) h = mix64(h, w[i]);
+    }
+    h = mix64(h, d.bindings.size());
+    for (const ShaderBinding &b : d.bindings) {   // (field by field: the struct has padding)
+        const uint64_t f[] = {(uint64_t)b.kind, (uint64_t)(int64_t)b.stage, b.binding, b.count, b.bank, b.cbuf_index, b.cbuf_offset, b.shift_left,
+                              (uint64_t)b.has_secondary, b.sec_index, b.sec_offset, b.sec_shift_left, (uint64_t)(int64_t)b.tex_type,
+                              (uint64_t)b.is_depth, (uint64_t)b.is_written};
+        for (uint64_t v : f) h = mix64(h, v);
+    }
+    const uint64_t g[] = {d.num_bindings, d.vertex_inputs, d.frag_outputs, d.push_constant_stages, d.ydir_stages, (uint64_t)d.writes_memory};
+    for (uint64_t v : g) h = mix64(h, v);
+    return h ? h : 1;
+}
+static std::mutex g_canon_m;
+static std::unordered_map<uint64_t, ProgObj *> g_canon;            // pid -> the shared program
+static std::vector<std::unique_ptr<ProgObj>> g_warm_progs;           // programs the warm-up made (owned here)
+static void prog_build(ProgObj *p);
+static void warm_start();
 static ProgObj *get_program(const GpuDrawState &s) {
     uint8_t types[32];
     for (int i = 0; i < 32; i++) types[i] = i < s.num_attribs ? attrib_type(s.attribs[i].format) : AT_DISABLED;
@@ -924,10 +955,11 @@ static ProgObj *get_program(const GpuDrawState &s) {
     int afunc = alpha_test_func(s); kb[kn++] = (uint8_t)afunc; if (afunc) { memcpy(kb + kn, &s.alpha_ref, 4); kn += 4; }
     int xc = std::min(s.xfb_count, 128); kb[kn++] = (uint8_t)xc; kb[kn++] = (uint8_t)(s.xfb_stride >> 2);
     if (xc) { memcpy(kb + kn, s.xfb_locs, (size_t)xc); kn += (size_t)xc; }
+    { static bool warmed; if (!warmed) { warmed = true; warm_start(); } }
     static const uint8_t *last_key; static size_t last_n; static ProgObj *last_prog;   // most draws repeat the program
     if (last_prog && last_n == kn && !memcmp(last_key, kb, kn)) return last_prog;
     if (std::unique_ptr<ProgObj> *hit = g_progs.find(kb, kn)) {
-        last_prog = hit->get(); last_n = kn;
+        last_prog = hit->get()->alias ? hit->get()->alias : hit->get(); last_n = kn;
         static std::vector<uint8_t> lk; lk.assign(kb, kb + kn); last_key = lk.data();
         return last_prog;
     }
@@ -974,11 +1006,24 @@ static ProgObj *get_program(const GpuDrawState &s) {
         static int n_ydir; n_ydir++;
         if (n_ydir <= 5 || (n_ydir & (n_ydir - 1)) == 0) LOG(1, "[gpu] %d programs read SR_Y_DIRECTION (stages 0x%x, lower_left %d)", n_ydir, p->desc.ydir_stages, (int)s.lower_left);
     }
+    // the same program (same SPIR-V and bindings) already made - here or by the warm-up: shared, so are its pipelines
+    p->pid = desc_hash(p->desc);
+    {
+        std::lock_guard<std::mutex> l(g_canon_m);
+        auto it = g_canon.find(p->pid);
+        if (it != g_canon.end() && it->second->ok) { p->alias = it->second; return p->alias; }
+        prog_build(p);
+        if (p->ok) g_canon[p->pid] = p;
+    }
+    return p;
+}
+// shader modules, descriptor set layout and pipeline layout of a program, from its desc
+static void prog_build(ProgObj *p) {
     for (int st = 0; st < GS_COUNT; st++) {
         if (p->desc.spirv[st].empty()) continue;
         VkShaderModuleCreateInfo mi = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
         mi.codeSize = p->desc.spirv[st].size() * 4; mi.pCode = p->desc.spirv[st].data();
-        if (vkCreateShaderModule(g_dev, &mi, nullptr, &p->mod[st]) != VK_SUCCESS) { log_once("mod", "[gpu] vkCreateShaderModule failed"); return p; }
+        if (vkCreateShaderModule(g_dev, &mi, nullptr, &p->mod[st]) != VK_SUCCESS) { log_once("mod", "[gpu] vkCreateShaderModule failed"); return; }
     }
     std::vector<VkDescriptorSetLayoutBinding> lb;
     {   // dynamic uniform buffers when the device allows that many (XRT_NO_DESC_CACHE=1: plain ones, a set per draw)
@@ -1000,15 +1045,14 @@ static ProgObj *get_program(const GpuDrawState &s) {
     }
     VkDescriptorSetLayoutCreateInfo dl = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     dl.bindingCount = (uint32_t)lb.size(); dl.pBindings = lb.data();
-    if (vkCreateDescriptorSetLayout(g_dev, &dl, nullptr, &p->dsl) != VK_SUCCESS) return p;
+    if (vkCreateDescriptorSetLayout(g_dev, &dl, nullptr, &p->dsl) != VK_SUCCESS) return;
     for (int st = 0; st < GS_COUNT; st++) if (p->desc.push_constant_stages & (1u << st)) p->pc_stages |= k_vk_stage[st];
     VkPushConstantRange pcr = {p->pc_stages, 0, 64};
     VkPipelineLayoutCreateInfo pl = {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     pl.setLayoutCount = 1; pl.pSetLayouts = &p->dsl;
     pl.pushConstantRangeCount = p->pc_stages ? 1 : 0; pl.pPushConstantRanges = &pcr;
-    if (vkCreatePipelineLayout(g_dev, &pl, nullptr, &p->layout) != VK_SUCCESS) return p;
+    if (vkCreatePipelineLayout(g_dev, &pl, nullptr, &p->layout) != VK_SUCCESS) return;
     p->ok = true;
-    return p;
 }
 
 // ---------------------------------------------------------------- pipelines
@@ -1022,6 +1066,7 @@ struct PipeKey {
     uint32_t stencil_test, stencil_func[2], stencil_op[2][3];
     uint32_t color_fmt[8], num_colors, depth_fmt, lower_left, rast_discard;
     uint32_t logic_op, depth_bias;
+    uint32_t attr_mask, stencil_att;   // attributes in the pipeline; the depth target has stencil
 };
 static KeyCache<VkPipeline> g_pipes;
 // ---------------------------------------------------------------- asynchronous pipelines (M5: stutter)
@@ -1172,35 +1217,9 @@ static uint32_t depth_bias_on(const GpuDrawState &s) {
     { static int n; if (n++ < 4) LOG(1, "[gpu] polygon offset: factor %g units %g clamp %g", s.poly_offset[0], s.poly_offset[1], s.poly_offset[2]); }
     return 1;
 }
-static VkPipeline get_pipeline(const GpuDrawState &s, ProgObj *p, VkPrimitiveTopology topo) {
-    PipeKey k; memset(&k, 0, sizeof k);
-    k.prog = p; k.topology = topo;
-    for (int i = 0; i < 16; i++) if (p->desc.vertex_inputs & (1u << i) && i < s.num_attribs) {
-        k.attr[i] = {(uint32_t)s.attribs[i].format, s.attribs[i].offset, (uint32_t)s.attribs[i].stream};
-        int st = s.attribs[i].stream & 15;
-        k.stream[st] = {s.streams[st].stride, s.streams[st].divisor};
-    }
-    k.num_colors = (uint32_t)s.num_colors;
-    for (int i = 0; i < s.num_colors && i < 8; i++) {
-        k.color_fmt[i] = s.color[i] ? (uint32_t)s.color[i]->format : 0;
-        const GpuBlend &b = s.blend[i];
-        k.blend[i] = {(uint32_t)((s.blend_enable >> i) & 1), (uint32_t)b.src_c, (uint32_t)b.dst_c, (uint32_t)b.src_a, (uint32_t)b.dst_a, (uint32_t)b.eq_c, (uint32_t)b.eq_a, s.channel_mask[i]};
-    }
-    k.depth_fmt = s.depth ? (uint32_t)s.depth->format : 0;
-    k.depth_test = s.depth && s.depth_test; k.depth_write = s.depth && s.depth_write; k.depth_func = (uint32_t)s.depth_func;
-    k.stencil_test = s.depth && s.depth->depth_kind >= 2 && s.stencil_test;
-    if (k.stencil_test) for (int f = 0; f < 2; f++) { k.stencil_func[f] = (uint32_t)s.stencil_func[f]; for (int j = 0; j < 3; j++) k.stencil_op[f][j] = (uint32_t)s.stencil_op[f][j]; }
-    k.cull = (uint32_t)s.cull_face; k.front = (uint32_t)s.front_face; k.poly = (uint32_t)s.polygon_mode; k.lower_left = s.lower_left; k.rast_discard = s.rast_discard;
-    k.logic_op = (uint32_t)pipe_logic_op(s); k.depth_bias = depth_bias_on(s);
-    static PipeKey last_k; static VkPipeline last_pipe = VK_NULL_HANDLE;   // most draws repeat the previous pipeline
-    if (last_pipe && !memcmp(&last_k, &k, sizeof k)) return last_pipe;
-    if (VkPipeline *hit = g_pipes.find(&k, sizeof k)) {
-        VkPipeline pp = *hit ? *hit : pipe_pending(hit, draw_may_skip(s, p));
-        if (pp) { last_k = k; last_pipe = pp; }
-        return pp;
-    }
-
-    auto job = std::make_shared<PipeJob>();
+// The Vulkan create info of a pipeline, from its key alone (the draw path and the warm-up build the same pipelines)
+static void pipe_build_info(PipeJob &j, const PipeKey &k, const ProgObj *p) {
+    PipeJob *job = &j;
     auto &stages = job->stages; uint32_t ns = 0;
     for (int st = 0; st < GS_COUNT; st++) if (p->mod[st]) {
         stages[ns] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
@@ -1209,31 +1228,31 @@ static VkPipeline get_pipeline(const GpuDrawState &s, ProgObj *p, VkPrimitiveTop
     auto &va = job->va; uint32_t nva = 0;
     auto &vb = job->vb; uint32_t nvb = 0; bool have_stream[16] = {};
     for (int i = 0; i < 16; i++) {
-        if (!(p->desc.vertex_inputs & (1u << i)) || i >= s.num_attribs) continue;
-        VkFormat f = vertex_format(s.attribs[i].format);
-        if (f == VK_FORMAT_UNDEFINED) { log_once("vfmt" + std::to_string(s.attribs[i].format), "[gpu] unknown vertex format %d", s.attribs[i].format); continue; }
-        int st = s.attribs[i].stream & 15;
-        va[nva++] = {(uint32_t)i, (uint32_t)st, f, s.attribs[i].offset};
+        if (!(k.attr_mask & (1u << i))) continue;
+        VkFormat f = vertex_format((int)k.attr[i].format);
+        if (f == VK_FORMAT_UNDEFINED) { log_once("vfmt" + std::to_string(k.attr[i].format), "[gpu] unknown vertex format %d", (int)k.attr[i].format); continue; }
+        int st = (int)k.attr[i].stream & 15;
+        va[nva++] = {(uint32_t)i, (uint32_t)st, f, k.attr[i].offset};
         if (!have_stream[st]) {
             have_stream[st] = true;
-            vb[nvb++] = {(uint32_t)st, s.streams[st].stride, s.streams[st].divisor ? VK_VERTEX_INPUT_RATE_INSTANCE : VK_VERTEX_INPUT_RATE_VERTEX};
+            vb[nvb++] = {(uint32_t)st, k.stream[st].stride, k.stream[st].divisor ? VK_VERTEX_INPUT_RATE_INSTANCE : VK_VERTEX_INPUT_RATE_VERTEX};
         }
     }
     auto &vi = job->vi; vi = {VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
     vi.vertexBindingDescriptionCount = nvb; vi.pVertexBindingDescriptions = vb;
     vi.vertexAttributeDescriptionCount = nva; vi.pVertexAttributeDescriptions = va;
     auto &ia = job->ia; ia = {VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
-    ia.topology = topo;
+    ia.topology = (VkPrimitiveTopology)k.topology;
     auto &vp = job->vp; vp = {VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
     vp.viewportCount = 1; vp.scissorCount = 1;
     auto &rs = job->rs; rs = {VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
-    rs.polygonMode = s.polygon_mode == 0 ? VK_POLYGON_MODE_POINT : s.polygon_mode == 1 ? VK_POLYGON_MODE_LINE : VK_POLYGON_MODE_FILL;
-    rs.cullMode = (VkCullModeFlags)(s.cull_face & 3);       // NONE, FRONT, BACK, FRONT_AND_BACK
-    rs.rasterizerDiscardEnable = s.rast_discard ? VK_TRUE : VK_FALSE;
+    rs.polygonMode = k.poly == 0 ? VK_POLYGON_MODE_POINT : k.poly == 1 ? VK_POLYGON_MODE_LINE : VK_POLYGON_MODE_FILL;
+    rs.cullMode = (VkCullModeFlags)(k.cull & 3);       // NONE, FRONT, BACK, FRONT_AND_BACK
+    rs.rasterizerDiscardEnable = k.rast_discard ? VK_TRUE : VK_FALSE;
     // The lower-left origin is emulated with a negative-height viewport. Vulkan determines facing after the
     // viewport transform, so the flip already gives OpenGL's winding: NVN's front face maps over unchanged.
     // (Verified on the title screen: inverting it here culled the front faces of every back-face-culled mesh.)
-    bool ccw = s.front_face != 0;
+    bool ccw = k.front != 0;
     rs.frontFace = ccw ? VK_FRONT_FACE_COUNTER_CLOCKWISE : VK_FRONT_FACE_CLOCKWISE;
     rs.lineWidth = 1.0f;
     rs.depthBiasEnable = k.depth_bias ? VK_TRUE : VK_FALSE;
@@ -1243,7 +1262,7 @@ static VkPipeline get_pipeline(const GpuDrawState &s, ProgObj *p, VkPrimitiveTop
     ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
     auto &ds = job->ds; ds = {VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
     ds.depthTestEnable = k.depth_test; ds.depthWriteEnable = k.depth_write;
-    ds.depthCompareOp = (VkCompareOp)std::max(0, std::min(7, s.depth_func - 1));
+    ds.depthCompareOp = (VkCompareOp)std::max(0, std::min(7, (int)k.depth_func - 1));
     if (k.stencil_test) {
         ds.stencilTestEnable = VK_TRUE;
         auto sop = [](uint32_t o) { return (VkStencilOp)std::max(0, std::min(7, (int)o - 1)); };   // NVN 1 KEEP .. 8 DECR_WRAP
@@ -1256,20 +1275,21 @@ static VkPipeline get_pipeline(const GpuDrawState &s, ProgObj *p, VkPrimitiveTop
         // front/back stay as NVN defines them (see the winding note above)
     }
     auto &ba = job->ba;
-    for (int i = 0; i < s.num_colors && i < 8; i++) {
-        const GpuBlend &b = s.blend[i];
+    const int ncol = (int)std::min<uint32_t>(k.num_colors, 8);
+    for (int i = 0; i < ncol; i++) {
+        const auto &b = k.blend[i];
         ba[i] = {};
-        ba[i].blendEnable = (s.blend_enable >> i) & 1;
-        ba[i].srcColorBlendFactor = blend_factor(b.src_c); ba[i].dstColorBlendFactor = blend_factor(b.dst_c);
-        ba[i].colorBlendOp = blend_op(b.eq_c);
-        ba[i].srcAlphaBlendFactor = blend_factor(b.src_a); ba[i].dstAlphaBlendFactor = blend_factor(b.dst_a);
-        ba[i].alphaBlendOp = blend_op(b.eq_a);
-        ba[i].colorWriteMask = s.channel_mask[i] & 15;
+        ba[i].blendEnable = b.enable ? VK_TRUE : VK_FALSE;
+        ba[i].srcColorBlendFactor = blend_factor((int)b.src_c); ba[i].dstColorBlendFactor = blend_factor((int)b.dst_c);
+        ba[i].colorBlendOp = blend_op((int)b.eq_c);
+        ba[i].srcAlphaBlendFactor = blend_factor((int)b.src_a); ba[i].dstAlphaBlendFactor = blend_factor((int)b.dst_a);
+        ba[i].alphaBlendOp = blend_op((int)b.eq_a);
+        ba[i].colorWriteMask = b.mask & 15;
         static int noblend = getenv("XRT_DEBUG_NOBLEND") ? 1 : 0;
         if (noblend) { ba[i].blendEnable = VK_FALSE; ba[i].colorWriteMask = 15; }
     }
     auto &cb = job->cb; cb = {VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
-    cb.attachmentCount = (uint32_t)std::min(s.num_colors, 8); cb.pAttachments = ba;
+    cb.attachmentCount = (uint32_t)ncol; cb.pAttachments = ba;
     if (k.logic_op) { cb.logicOpEnable = VK_TRUE; cb.logicOp = (VkLogicOp)(k.logic_op - 1); }
     auto &dyn = job->dyn;
     { const VkDynamicState d0[7] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_BLEND_CONSTANTS,
@@ -1278,16 +1298,56 @@ static VkPipeline get_pipeline(const GpuDrawState &s, ProgObj *p, VkPrimitiveTop
     auto &dy = job->dy; dy = {VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
     dy.dynamicStateCount = k.depth_bias ? 7 : 6; dy.pDynamicStates = dyn;
     auto &cfmt = job->cfmt;
-    for (int i = 0; i < 8; i++) cfmt[i] = i < s.num_colors && s.color[i] ? s.color[i]->format : VK_FORMAT_UNDEFINED;
+    for (int i = 0; i < 8; i++) cfmt[i] = i < ncol ? (VkFormat)k.color_fmt[i] : VK_FORMAT_UNDEFINED;
     auto &ri = job->ri; ri = {VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
     ri.colorAttachmentCount = cb.attachmentCount; ri.pColorAttachmentFormats = cfmt;
-    ri.depthAttachmentFormat = s.depth ? s.depth->format : VK_FORMAT_UNDEFINED;
-    ri.stencilAttachmentFormat = s.depth && s.depth->depth_kind >= 2 ? s.depth->format : VK_FORMAT_UNDEFINED;
+    ri.depthAttachmentFormat = k.depth_fmt ? (VkFormat)k.depth_fmt : VK_FORMAT_UNDEFINED;
+    ri.stencilAttachmentFormat = k.depth_fmt && k.stencil_att ? (VkFormat)k.depth_fmt : VK_FORMAT_UNDEFINED;
     auto &gi = job->gi; gi = {VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
     gi.pNext = &ri;
     gi.stageCount = ns; gi.pStages = stages; gi.pVertexInputState = &vi; gi.pInputAssemblyState = &ia;
     gi.pViewportState = &vp; gi.pRasterizationState = &rs; gi.pMultisampleState = &ms; gi.pDepthStencilState = &ds;
     gi.pColorBlendState = &cb; gi.pDynamicState = &dy; gi.layout = p->layout;
+}
+static void warm_collect();
+static void warm_record(const PipeKey &k, uint64_t pid);
+static uint64_t g_hitch_pipe_total;
+static std::unordered_set<VkPipeline> g_warm_set;   // warm-up pipelines not used yet (renderer thread)
+static uint64_t g_warm_used, g_warm_total;
+static VkPipeline get_pipeline(const GpuDrawState &s, ProgObj *p, VkPrimitiveTopology topo) {
+    PipeKey k; memset(&k, 0, sizeof k);
+    k.prog = p; k.topology = topo;
+    for (int i = 0; i < 16; i++) if (p->desc.vertex_inputs & (1u << i) && i < s.num_attribs) {
+        k.attr_mask |= 1u << i;
+        k.attr[i] = {(uint32_t)s.attribs[i].format, s.attribs[i].offset, (uint32_t)s.attribs[i].stream};
+        int st = s.attribs[i].stream & 15;
+        k.stream[st] = {s.streams[st].stride, s.streams[st].divisor};
+    }
+    k.num_colors = (uint32_t)s.num_colors;
+    for (int i = 0; i < s.num_colors && i < 8; i++) {
+        k.color_fmt[i] = s.color[i] ? (uint32_t)s.color[i]->format : 0;
+        const GpuBlend &b = s.blend[i];
+        k.blend[i] = {(uint32_t)((s.blend_enable >> i) & 1), (uint32_t)b.src_c, (uint32_t)b.dst_c, (uint32_t)b.src_a, (uint32_t)b.dst_a, (uint32_t)b.eq_c, (uint32_t)b.eq_a, s.channel_mask[i]};
+    }
+    k.depth_fmt = s.depth ? (uint32_t)s.depth->format : 0;
+    k.stencil_att = s.depth && s.depth->depth_kind >= 2;
+    k.depth_test = s.depth && s.depth_test; k.depth_write = s.depth && s.depth_write; k.depth_func = (uint32_t)s.depth_func;
+    k.stencil_test = s.depth && s.depth->depth_kind >= 2 && s.stencil_test;
+    if (k.stencil_test) for (int f = 0; f < 2; f++) { k.stencil_func[f] = (uint32_t)s.stencil_func[f]; for (int j = 0; j < 3; j++) k.stencil_op[f][j] = (uint32_t)s.stencil_op[f][j]; }
+    k.cull = (uint32_t)s.cull_face; k.front = (uint32_t)s.front_face; k.poly = (uint32_t)s.polygon_mode; k.lower_left = s.lower_left; k.rast_discard = s.rast_discard;
+    k.logic_op = (uint32_t)pipe_logic_op(s); k.depth_bias = depth_bias_on(s);
+    static PipeKey last_k; static VkPipeline last_pipe = VK_NULL_HANDLE;   // most draws repeat the previous pipeline
+    if (last_pipe && !memcmp(&last_k, &k, sizeof k)) return last_pipe;
+    warm_collect();
+    if (VkPipeline *hit = g_pipes.find(&k, sizeof k)) {
+        VkPipeline pp = *hit ? *hit : pipe_pending(hit, draw_may_skip(s, p));
+        if (pp) { last_k = k; last_pipe = pp; if (!g_warm_set.empty() && g_warm_set.erase(pp)) g_warm_used++; }
+        return pp;
+    }
+
+    auto job = std::make_shared<PipeJob>();
+    pipe_build_info(*job, k, p);
+    auto &gi = job->gi;
     g_pcache_new++;
     if (async_pipes()) {   // built in the background; this draw: skipped or waited for (pipe_pending)
         VkPipeline *slot = &g_pipes.insert(&k, sizeof k, VK_NULL_HANDLE);
@@ -1299,13 +1359,123 @@ static VkPipeline get_pipeline(const GpuDrawState &s, ProgObj *p, VkPrimitiveTop
     uint64_t prof_tp = plat_ticks_ns();
     VkResult pr = vkCreateGraphicsPipelines(g_dev, pipeline_cache(), 1, &gi, nullptr, &pipe);
     gpu_prof_add(PROF_PIPE, plat_ticks_ns() - prof_tp);
-    g_hitch_pipe_n++; g_hitch_pipe_ns += plat_ticks_ns() - prof_tp;
+    g_hitch_pipe_n++; g_hitch_pipe_total++; g_hitch_pipe_ns += plat_ticks_ns() - prof_tp;
     if (pr != VK_SUCCESS) {
         log_once("pipe", "[gpu] vkCreateGraphicsPipelines failed");
         pipe = VK_NULL_HANDLE;
     }
-    if (pipe) { last_k = k; last_pipe = pipe; }
+    if (pipe) { last_k = k; last_pipe = pipe; warm_record(k, p->pid); }
     return g_pipes.insert(&k, sizeof k, pipe);
+}
+
+// ---------------------------------------------------------------- warm-up (M5: stutter)
+// pipeline_list.bin (next to shader_cache.bin) records every pipeline made: (program content id, key). At start a
+// background thread makes those programs (from shader_cache.bin) and pipelines again, in the order the game first
+// needed them, and hands them to the renderer: meeting them again in game then costs nothing (it was ~1 ms each, the
+// stutter when new things appear). It starts over with the shader cache (same version). XRT_NO_WARMUP=1: off.
+static const uint32_t PLIST_MAGIC = 0x314c5058;   // "XPL1"
+static std::mutex g_warm_m, g_plist_m;
+static std::vector<std::pair<PipeKey, VkPipeline>> g_warm_done;
+static std::atomic<int> g_warm_pending{0};
+static FILE *g_plist_f;
+static void warm_record(const PipeKey &k, uint64_t pid) {
+    if (!g_plist_f || !pid) return;
+    PipeKey r = k; r.prog = nullptr;
+    std::lock_guard<std::mutex> l(g_plist_m);
+    fwrite(&pid, 8, 1, g_plist_f); fwrite(&r, sizeof r, 1, g_plist_f); fflush(g_plist_f);
+}
+static void warm_collect() {   // (renderer thread: the warm-up's pipelines into the pipeline table)
+    if (!g_warm_pending.load(std::memory_order_relaxed)) return;
+    std::vector<std::pair<PipeKey, VkPipeline>> v;
+    { std::lock_guard<std::mutex> l(g_warm_m); v.swap(g_warm_done); g_warm_pending = 0; }
+    for (auto &e : v) {
+        if (g_pipes.find(&e.first, sizeof e.first)) vkDestroyPipeline(g_dev, e.second, nullptr);   // (made meanwhile)
+        else { g_pipes.insert(&e.first, sizeof e.first, e.second); g_warm_set.insert(e.second); g_warm_total++; }
+    }
+}
+static void warm_run(std::vector<std::pair<uint64_t, PipeKey>> recs) {
+    xrt_sampler_register_thread("shader warm-up");
+#ifdef _WIN32
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+#endif
+    uint64_t t0 = plat_ticks_ns();
+    // the programs: shader_cache.bin entries whose content is one of the recorded programs
+    std::unordered_set<uint64_t> want; for (auto &r : recs) want.insert(r.first);
+    std::unordered_map<uint64_t, ProgObj *> progs;
+    if (FILE *f = fopen("shader_cache.bin", "rb")) {
+        uint32_t magic = 0, vl = 0; std::string fv;
+        bool ok = sc_read(f, &magic, 4) && magic == SCACHE_MAGIC && sc_read(f, &vl, 4) && vl < 256;
+        if (ok) { fv.resize(vl); ok = sc_read(f, &fv[0], vl) && fv == gpu_shader_version(); }
+        while (ok && progs.size() < want.size()) {
+            uint64_t key; std::vector<SQuery> q; uint32_t hdr[6]; ShaderProgramDesc d;
+            if (!sc_read(f, &key, 8) || !sc_vec(f, q) || !sc_read(f, hdr, sizeof hdr)) break;
+            bool good = true;
+            for (int st = 0; st < GS_COUNT && good; st++) good = sc_vec(f, d.spirv[st]);
+            if (!good || !sc_vec(f, d.bindings)) break;
+            d.num_bindings = hdr[0]; d.vertex_inputs = hdr[1]; d.frag_outputs = hdr[2];
+            d.push_constant_stages = hdr[3]; d.ydir_stages = hdr[4]; d.writes_memory = hdr[5] != 0; d.ok = true;
+            uint64_t pid = desc_hash(d);
+            if (!want.count(pid) || progs.count(pid)) continue;
+            std::lock_guard<std::mutex> l(g_canon_m);
+            auto it = g_canon.find(pid);
+            if (it != g_canon.end() && it->second->ok) { progs[pid] = it->second; continue; }
+            auto po = std::make_unique<ProgObj>();
+            po->desc = std::move(d); po->pid = pid;
+            prog_build(po.get());
+            if (!po->ok) continue;
+            g_canon[pid] = po.get(); progs[pid] = po.get();
+            g_warm_progs.push_back(std::move(po));
+        }
+        fclose(f);
+    }
+    double tp = (plat_ticks_ns() - t0) / 1e9;
+    // the pipelines, in recorded order
+    uint64_t made = 0, failed = 0;
+    for (auto &r : recs) {
+        auto it = progs.find(r.first);
+        if (it == progs.end()) continue;
+        PipeKey k = r.second; k.prog = it->second;
+        PipeJob job; pipe_build_info(job, k, it->second);
+        VkPipeline pipe = VK_NULL_HANDLE;
+        if (vkCreateGraphicsPipelines(g_dev, pipeline_cache(), 1, &job.gi, nullptr, &pipe) != VK_SUCCESS || !pipe) { failed++; continue; }
+        { std::lock_guard<std::mutex> l(g_warm_m); g_warm_done.push_back({k, pipe}); }
+        g_warm_pending = 1; made++;
+    }
+    g_pcache_new += made;
+    LOG(1, "[gpu] warm-up: %zu of %zu programs, %llu of %zu pipelines ready in %.1f s (programs %.1f s)%s", progs.size(), want.size(),
+        (unsigned long long)made, recs.size(), (plat_ticks_ns() - t0) / 1e9, tp, failed ? " - some failed" : "");
+}
+static void warm_start() {   // (renderer thread, first program: the device and the caches are ready)
+    scache_load();
+    pipeline_cache();
+    if (g_scache_state <= 0) return;
+    std::string ver = gpu_shader_version();
+    std::vector<std::pair<uint64_t, PipeKey>> recs;
+    bool fresh = true;
+    if (FILE *f = fopen("pipeline_list.bin", "rb")) {
+        uint32_t magic = 0, vl = 0, ks = 0; std::string fv;
+        bool ok = sc_read(f, &magic, 4) && magic == PLIST_MAGIC && sc_read(f, &ks, 4) && ks == sizeof(PipeKey) && sc_read(f, &vl, 4) && vl < 256;
+        if (ok) { fv.resize(vl); ok = sc_read(f, &fv[0], vl) && fv == ver; }
+        if (ok) {
+            fresh = false;
+            std::unordered_set<uint64_t> seen;
+            uint64_t pid; PipeKey k;
+            while (sc_read(f, &pid, 8) && sc_read(f, &k, sizeof k)) {
+                uint64_t h = key_hash(&k, sizeof k) ^ (pid * 0x9e3779b97f4a7c15ULL);
+                if (seen.insert(h).second) recs.push_back({pid, k});
+            }
+        }
+        fclose(f);
+        if (!ok) remove("pipeline_list.bin");
+    }
+    g_plist_f = fopen("pipeline_list.bin", fresh ? "wb" : "ab");
+    if (g_plist_f && fresh) {
+        uint32_t ks = sizeof(PipeKey), vl = (uint32_t)ver.size();
+        fwrite(&PLIST_MAGIC, 4, 1, g_plist_f); fwrite(&ks, 4, 1, g_plist_f); fwrite(&vl, 4, 1, g_plist_f); fwrite(ver.data(), 1, vl, g_plist_f); fflush(g_plist_f);
+    }
+    if (recs.empty() || getenv("XRT_NO_WARMUP")) { LOG(1, "[gpu] warm-up: %zu pipelines recorded%s", recs.size(), getenv("XRT_NO_WARMUP") ? " (off: XRT_NO_WARMUP)" : ""); return; }
+    LOG(1, "[gpu] warm-up: making %zu recorded pipelines in the background", recs.size());
+    std::thread(warm_run, std::move(recs)).detach();
 }
 
 // ---------------------------------------------------------------- render passes
@@ -2203,6 +2373,8 @@ static void hitch_report(uint64_t frame) {
     g_io_ns = g_io_bytes = g_io_reads = g_io_missing = g_tex_new = g_tex_new_ns = 0;
     if (frame % 1800 == 0 && (g_scache_hits || g_scache_misses))
         LOG(1, "[gpu] shader cache: %llu programs from disk (%llu with other texture handles), %llu translated this session", (unsigned long long)g_scache_hits, (unsigned long long)g_scache_hits_subst, (unsigned long long)g_scache_misses);
+    if (frame % 1800 == 0 && g_warm_total)
+        LOG(1, "[gpu] warm-up pipelines used so far: %llu of %llu; pipelines made during play: %llu", (unsigned long long)g_warm_used, (unsigned long long)g_warm_total, (unsigned long long)g_hitch_pipe_total);
     if (frame % 1800 == 0 && g_pj_built.load())
         LOG(1, "[gpu] background pipelines: %llu built (%.0f ms in all), draws skipped while building %llu, waits %llu",
             (unsigned long long)g_pj_built.load(), g_pj_built_ns.load() / 1e6, (unsigned long long)g_pj_skipped, (unsigned long long)g_pj_waited);

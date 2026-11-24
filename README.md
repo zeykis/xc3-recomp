@@ -35,8 +35,15 @@ own console. About 30 GB of free space. Windows 10 (1803) or newer.
 3. Play: the **Xenoblade Chronicles 3 (recomp)** shortcut (desktop / Start menu) opens the launcher (*Play*, *Play
    Randomized*). Everything stays in this folder: `game\` (your game files and saves), `bin\` (the program).
 
-Run `Install XC3.bat` again at any time: it continues where it stopped, updates a `git clone` and rebuilds what
-changed. `Install XC3.bat setup` opens Setup first (to add DLC: tick *keep the installed game data*).
+**Updates:** the launcher checks GitHub when it opens (*Check for updates* / *Update now...*), or double-click
+**`Update XC3.bat`** (`Update XC3.bat check` only checks). It gets the new version - `git pull` for a clone, the zip
+copied over a downloaded copy (your `game\`, saves, settings and `.tools\` stay) - rebuilds what changed (usually a
+few minutes) and installs it into `bin\`. `Install XC3.bat` also looks for updates and continues where it stopped. `Install XC3.bat setup` opens Setup first (to add DLC: tick *keep the installed game data*).
+**Stutter when something new appears:** each new shader is translated (once, then kept in `game\shader_cache.bin`)
+and each new pipeline built (kept by the driver and in `game\pipeline_list.bin`). At the next start, a background
+thread builds every pipeline met before while the title screen is up, so the same places don't stutter again; the
+first time anything appears it still costs a short hitch. The caches are kept across updates and rebuilds (they only
+start over when the shader translator itself changes). `XRT_NO_WARMUP=1` turns the warm-up off.
 If your antivirus quarantines `xc3.exe` (a large new program), restore it and exclude the folder, then run the
 installer again.
 
